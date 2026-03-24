@@ -27,6 +27,9 @@ import (
 	"log/slog"
 
 	"github.com/MedaiP90/GiTK/config"
+	"github.com/MedaiP90/GiTK/git"
+	"github.com/MedaiP90/GiTK/ui/dialogs"
+	"github.com/MedaiP90/GiTK/ui/sidebar"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gio/v2"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
@@ -56,6 +59,12 @@ type Window struct {
 
 	// statusPage is the welcome/empty state shown when no repository is open.
 	statusPage *adw.StatusPage
+
+	// sidebar is the left sidebar with repositories and branches.
+	sidebar *sidebar.Sidebar
+
+	// repo is the currently open git repository (nil if none).
+	repo *git.Repository
 
 	// cfg is a reference to the app configuration for reading/writing prefs.
 	cfg *config.Config
@@ -199,10 +208,9 @@ func newMenu() *gio.Menu {
 // in a ToastOverlay for notifications.
 func (w *Window) buildContentArea() {
 	// --- Sidebar ---
-	// For now, show a placeholder. The full sidebar (Phase 3) will have
-	// the repository list and branch tree.
-	sidebarContent := w.buildSidebarPlaceholder()
-	sidebarPage := adw.NewNavigationPage(sidebarContent, "Repositories")
+	// The sidebar shows recent repositories and branch tree.
+	w.sidebar = sidebar.New(w.cfg, w.onRepoSelected, w.onBranchSelected)
+	sidebarPage := adw.NewNavigationPage(w.sidebar.Root, "Repositories")
 
 	// --- Content area ---
 	// The content area uses a GtkStack to switch between views:
@@ -239,28 +247,24 @@ func (w *Window) buildContentArea() {
 	w.toastOverlay.SetChild(w.splitView)
 }
 
-// buildSidebarPlaceholder creates a temporary sidebar widget for Phase 1.
-// This will be replaced with the full sidebar (repo list + branch tree)
-// in Phase 3.
-func (w *Window) buildSidebarPlaceholder() gtk.Widgetter {
-	// Use a simple list box as placeholder.
-	box := gtk.NewBox(gtk.OrientationVertical, 6)
-	box.SetMarginTop(12)
-	box.SetMarginBottom(12)
-	box.SetMarginStart(12)
-	box.SetMarginEnd(12)
+// onRepoSelected is called by the sidebar when a repository is selected.
+func (w *Window) onRepoSelected(repo *git.Repository) {
+	w.repo = repo
+	w.sidebar.SetRepository(repo)
+	w.window.SetTitle("GiTK — " + repo.Name())
+	w.ShowToast("Opened " + repo.Name())
 
-	// "No repositories" label.
-	label := gtk.NewLabel("No repositories open")
-	label.AddCSSClass("dim-label")
-	box.Append(label)
+	// TODO (Phase 4): Load commit log and switch content stack to "log" view.
+	slog.Info("repository selected", "path", repo.Path())
+}
 
-	// Wrap in a scrolled window in case the list grows.
-	scrolled := gtk.NewScrolledWindow()
-	scrolled.SetChild(box)
-	scrolled.SetVExpand(true)
-
-	return scrolled
+// onBranchSelected is called by the sidebar when a branch is clicked.
+func (w *Window) onBranchSelected(branchName string, isRemote bool) {
+	if w.repo == nil {
+		return
+	}
+	// TODO (Phase 7): Handle branch checkout/actions.
+	slog.Info("branch selected", "name", branchName, "remote", isRemote)
 }
 
 // registerWindowActions registers GActions scoped to this window.
@@ -300,17 +304,33 @@ func (w *Window) onOpenRepository() {
 
 		path := file.Path()
 		slog.Info("opening repository", "path", path)
-		w.ShowToast("Opening " + path + "…")
 
-		// TODO (Phase 3): Actually open the repository using git.OpenRepository()
-		// and populate the sidebar + content area.
+		// Open the repository using the git backend.
+		repo, err := git.OpenRepository(path)
+		if err != nil {
+			w.ShowToast("Not a Git repository: " + path)
+			slog.Warn("failed to open repository", "path", path, "error", err)
+			return
+		}
+
+		// Update config and UI.
+		w.cfg.AddRecentRepository(path)
+		if saveErr := w.cfg.Save(); saveErr != nil {
+			slog.Warn("failed to save config", "error", saveErr)
+		}
+		w.onRepoSelected(repo)
 	})
 }
 
 // onCloneRepository handles the "Clone Repository" action.
-// Shows a dialog for entering the clone URL and destination.
+// Shows the clone dialog for entering the URL and destination.
 func (w *Window) onCloneRepository() {
-	// TODO (Phase 3): Implement clone dialog using AdwDialog.
-	slog.Info("clone action triggered")
-	w.ShowToast("Clone dialog coming soon…")
+	dialogs.ShowCloneDialog(w.window, func(repo *git.Repository) {
+		// Clone completed — treat it like opening a repo.
+		w.cfg.AddRecentRepository(repo.Path())
+		if err := w.cfg.Save(); err != nil {
+			slog.Warn("failed to save config after clone", "error", err)
+		}
+		w.onRepoSelected(repo)
+	})
 }
