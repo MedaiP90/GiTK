@@ -28,6 +28,8 @@ import (
 
 	"github.com/MedaiP90/GiTK/config"
 	"github.com/MedaiP90/GiTK/git"
+	"github.com/MedaiP90/GiTK/ui/commitdetail"
+	"github.com/MedaiP90/GiTK/ui/commitlog"
 	"github.com/MedaiP90/GiTK/ui/dialogs"
 	"github.com/MedaiP90/GiTK/ui/sidebar"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
@@ -62,6 +64,15 @@ type Window struct {
 
 	// sidebar is the left sidebar with repositories and branches.
 	sidebar *sidebar.Sidebar
+
+	// commitLog is the commit history table view.
+	commitLog *commitlog.CommitLog
+
+	// commitDetail is the commit detail panel (right side).
+	commitDetail *commitdetail.CommitDetail
+
+	// diffView is the inline diff viewer.
+	diffView *commitdetail.DiffView
 
 	// repo is the currently open git repository (nil if none).
 	repo *git.Repository
@@ -226,6 +237,34 @@ func (w *Window) buildContentArea() {
 	w.statusPage.SetIconName("vcs-branch-symbolic")
 	w.contentStack.AddNamed(w.statusPage, "welcome")
 
+	// --- Commit log view (main view when a repo is open) ---
+	// The log view shows a split between the commit table and detail panel.
+	w.commitLog = commitlog.New(func(commit git.CommitInfo) {
+		// When a commit is selected, show its details.
+		w.commitDetail.SetCommit(commit)
+	})
+
+	// --- Commit detail panel ---
+	w.commitDetail = commitdetail.New(func(diff git.DiffResult) {
+		// When a file is selected, show the diff.
+		w.diffView.SetDiff(diff)
+		w.contentStack.SetVisibleChildName("diff")
+	})
+
+	// --- Diff view ---
+	w.diffView = commitdetail.NewDiffView()
+
+	// Combine commit log + detail into a horizontal split.
+	logDetailSplit := gtk.NewPaned(gtk.OrientationHorizontal)
+	logDetailSplit.SetStartChild(w.commitLog.Root)
+	logDetailSplit.SetEndChild(w.commitDetail.Root)
+	logDetailSplit.SetPosition(700) // Initial split position.
+	logDetailSplit.SetShrinkStartChild(false)
+	logDetailSplit.SetShrinkEndChild(false)
+
+	w.contentStack.AddNamed(logDetailSplit, "log")
+	w.contentStack.AddNamed(w.diffView.Root, "diff")
+
 	// Set the welcome page as the visible child.
 	w.contentStack.SetVisibleChildName("welcome")
 
@@ -251,10 +290,11 @@ func (w *Window) buildContentArea() {
 func (w *Window) onRepoSelected(repo *git.Repository) {
 	w.repo = repo
 	w.sidebar.SetRepository(repo)
+	w.commitLog.SetRepository(repo)
+	w.commitDetail.SetRepository(repo)
 	w.window.SetTitle("GiTK — " + repo.Name())
+	w.contentStack.SetVisibleChildName("log")
 	w.ShowToast("Opened " + repo.Name())
-
-	// TODO (Phase 4): Load commit log and switch content stack to "log" view.
 	slog.Info("repository selected", "path", repo.Path())
 }
 
