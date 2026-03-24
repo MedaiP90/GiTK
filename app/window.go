@@ -23,6 +23,7 @@
 package app
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/MedaiP90/GiTK/config"
@@ -287,7 +288,9 @@ func (w *Window) onOpenRepository() {
 	dialog.SetTitle("Open Git Repository")
 
 	// We want to select a folder (git repos are directories).
-	dialog.SelectFolder(w.window, nil, func(result gio.AsyncResulter) {
+	// SelectFolder takes a context.Context (for cancellation), the parent
+	// window, and an async callback.
+	dialog.SelectFolder(context.Background(), &w.window.Window, func(result gio.AsyncResulter) {
 		file, err := dialog.SelectFolderFinish(result)
 		if err != nil {
 			// User cancelled the dialog — not an error.
