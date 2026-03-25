@@ -4,8 +4,6 @@ A comprehensive, native GTK4 Git GUI client for GNOME, written in Go.
 
 GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bindings and [go-git](https://github.com/go-git/go-git) for a pure-Go Git backend. It follows the [GNOME Human Interface Guidelines](https://developer.gnome.org/hig/) and is designed primarily for Linux/GNOME, with cross-platform potential.
 
-**App ID:** `io.github.MedaiP90.GiTK` (Flathub-verifiable GitHub URI format)
-
 ---
 
 ## Features
