@@ -257,12 +257,19 @@ func (w *Window) buildPrimaryMenu() *gtk.MenuButton {
 	// declaratively — each item references a GAction by name.
 	menu := newMenu()
 
-	// Section 1: View actions
+	// Section 1: Repository actions
+	repoSection := newMenu()
+	repoSection.Append("Create Tag\u2026", "win.create-tag")
+	repoSection.Append("Stash\u2026", "win.stash")
+	repoSection.Append("Fetch All", "win.fetch")
+	menu.AppendSection("", repoSection)
+
+	// Section 2: View actions
 	viewSection := newMenu()
 	viewSection.Append("Keyboard Shortcuts", "app.shortcuts")
 	menu.AppendSection("", viewSection)
 
-	// Section 2: Application actions
+	// Section 3: Application actions
 	appSection := newMenu()
 	appSection.Append("Preferences", "app.preferences")
 	appSection.Append("About GiTK", "app.about")
@@ -403,12 +410,26 @@ func (w *Window) onRepoSelected(repo *git.Repository) {
 }
 
 // onBranchSelected is called by the sidebar when a branch is clicked.
+// It checks out the selected branch and refreshes the commit log.
 func (w *Window) onBranchSelected(branchName string, isRemote bool) {
 	if w.repo == nil {
 		return
 	}
-	// TODO (Phase 7): Handle branch checkout/actions.
 	slog.Info("branch selected", "name", branchName, "remote", isRemote)
+
+	go func() {
+		err := w.repo.Checkout(branchName)
+		glib.IdleAdd(func() {
+			if err != nil {
+				slog.Warn("checkout failed", "branch", branchName, "error", err)
+				w.ShowToast("Checkout failed: " + err.Error())
+				return
+			}
+			w.ShowToast("Switched to " + branchName)
+			w.commitLog.SetRepository(w.repo)
+			w.sidebar.RefreshBranches()
+		})
+	}()
 }
 
 // registerWindowActions registers GActions scoped to this window.
@@ -423,6 +444,48 @@ func (w *Window) registerWindowActions() {
 		w.onOpenRepository()
 	})
 	w.window.AddAction(openAction)
+
+	// Create Tag action.
+	tagAction := gio.NewSimpleAction("create-tag", nil)
+	tagAction.ConnectActivate(func(param *glib.Variant) {
+		if w.repo != nil {
+			dialogs.ShowCreateTagDialog(w.window, w.repo, "", func(msg string) {
+				w.ShowToast(msg)
+				w.sidebar.RefreshBranches()
+			})
+		}
+	})
+	w.window.AddAction(tagAction)
+
+	// Stash action.
+	stashAction := gio.NewSimpleAction("stash", nil)
+	stashAction.ConnectActivate(func(param *glib.Variant) {
+		dialogs.ShowStashDialog(w.window, func(msg string) {
+			w.ShowToast(msg)
+		})
+	})
+	w.window.AddAction(stashAction)
+
+	// Fetch All action.
+	fetchAction := gio.NewSimpleAction("fetch", nil)
+	fetchAction.ConnectActivate(func(param *glib.Variant) {
+		if w.repo == nil {
+			return
+		}
+		go func() {
+			err := w.repo.Fetch()
+			glib.IdleAdd(func() {
+				if err != nil {
+					w.ShowToast("Fetch failed: " + err.Error())
+					return
+				}
+				w.ShowToast("Fetched from origin")
+				w.sidebar.RefreshBranches()
+				w.commitLog.SetRepository(w.repo)
+			})
+		}()
+	})
+	w.window.AddAction(fetchAction)
 }
 
 // onOpenRepository handles the "Open Repository" action. It shows a native
