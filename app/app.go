@@ -11,6 +11,7 @@ import (
 	"log/slog"
 
 	"github.com/MedaiP90/GiTK/config"
+	"github.com/MedaiP90/GiTK/ui/prefs"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gio/v2"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
@@ -146,8 +147,9 @@ func (a *GiTKApp) registerActions() {
 	// Ctrl+, opens the preferences window (standard GNOME convention).
 	prefsAction := gio.NewSimpleAction("preferences", nil)
 	prefsAction.ConnectActivate(func(param *glib.Variant) {
-		// TODO: show preferences window (Phase 8)
-		slog.Info("preferences action triggered")
+		if a.win != nil {
+			prefs.Show(a.win.window, a.cfg)
+		}
 	})
 	a.app.AddAction(prefsAction)
 	a.app.SetAccelsForAction("app.preferences", []string{"<Control>comma"})

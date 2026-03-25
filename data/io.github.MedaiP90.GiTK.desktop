@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=GiTK
+Comment=A comprehensive GTK4 Git GUI client for GNOME
+Exec=gitk
+Icon=io.github.MedaiP90.GiTK
+Terminal=false
+Type=Application
+Categories=Development;RevisionControl;GTK;GNOME;
+Keywords=git;version control;vcs;repository;commit;branch;merge;
+StartupNotify=true

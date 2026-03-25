@@ -31,7 +31,10 @@ import (
 	"github.com/MedaiP90/GiTK/ui/commitdetail"
 	"github.com/MedaiP90/GiTK/ui/commitlog"
 	"github.com/MedaiP90/GiTK/ui/dialogs"
+	"github.com/MedaiP90/GiTK/ui/graphview"
+	"github.com/MedaiP90/GiTK/ui/merge"
 	"github.com/MedaiP90/GiTK/ui/sidebar"
+	"github.com/MedaiP90/GiTK/ui/staging"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gio/v2"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
@@ -73,6 +76,15 @@ type Window struct {
 
 	// diffView is the inline diff viewer.
 	diffView *commitdetail.DiffView
+
+	// stagingView is the staging area view.
+	stagingView *staging.StagingView
+
+	// graphView is the visual DAG graph view.
+	graphView *graphview.GraphView
+
+	// mergeView is the three-pane merge editor.
+	mergeView *merge.MergeView
 
 	// repo is the currently open git repository (nil if none).
 	repo *git.Repository
@@ -169,11 +181,72 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	})
 	header.PackStart(cloneBtn)
 
+	// --- View switcher buttons ---
+	// These toggle between the main views: Log, Staging, Graph.
+	logBtn := gtk.NewToggleButton()
+	logBtn.SetIconName("view-list-symbolic")
+	logBtn.SetTooltipText("Commit Log")
+	logBtn.SetActive(true)
+	logBtn.ConnectClicked(func() {
+		if w.repo != nil {
+			w.contentStack.SetVisibleChildName("log")
+		}
+	})
+	header.PackStart(logBtn)
+
+	stagingBtn := gtk.NewToggleButton()
+	stagingBtn.SetIconName("document-edit-symbolic")
+	stagingBtn.SetTooltipText("Staging Area")
+	stagingBtn.ConnectClicked(func() {
+		if w.repo != nil {
+			w.stagingView.SetRepository(w.repo)
+			w.contentStack.SetVisibleChildName("staging")
+		}
+	})
+	header.PackStart(stagingBtn)
+
+	graphBtn := gtk.NewToggleButton()
+	graphBtn.SetIconName("view-app-grid-symbolic")
+	graphBtn.SetTooltipText("Graph View")
+	graphBtn.ConnectClicked(func() {
+		if w.repo != nil {
+			w.graphView.LoadFromRepo(w.repo)
+			w.contentStack.SetVisibleChildName("graph")
+		}
+	})
+	header.PackStart(graphBtn)
+
 	// --- Right side: Primary menu ---
 	// The primary menu is the hamburger menu (≡) in the top-right corner.
 	// It contains actions like Preferences, Keyboard Shortcuts, About.
 	menuBtn := w.buildPrimaryMenu()
 	header.PackEnd(menuBtn)
+
+	// --- Right side: Remote operations ---
+	pushBtn := gtk.NewButtonFromIconName("send-to-symbolic")
+	pushBtn.SetTooltipText("Push")
+	pushBtn.ConnectClicked(func() {
+		if w.repo != nil {
+			dialogs.ShowPushDialog(w.window, w.repo, func(msg string) {
+				w.ShowToast(msg)
+			})
+		}
+	})
+	header.PackEnd(pushBtn)
+
+	pullBtn := gtk.NewButtonFromIconName("folder-download-symbolic")
+	pullBtn.SetTooltipText("Pull")
+	pullBtn.ConnectClicked(func() {
+		if w.repo != nil {
+			dialogs.ShowPullDialog(w.window, w.repo, func(msg string) {
+				w.ShowToast(msg)
+				if w.repo != nil {
+					w.commitLog.SetRepository(w.repo)
+				}
+			})
+		}
+	})
+	header.PackEnd(pullBtn)
 
 	return header
 }
@@ -264,6 +337,37 @@ func (w *Window) buildContentArea() {
 
 	w.contentStack.AddNamed(logDetailSplit, "log")
 	w.contentStack.AddNamed(w.diffView.Root, "diff")
+
+	// --- Staging view ---
+	w.stagingView = staging.New(func(hash string) {
+		// After a commit, refresh the log.
+		if w.repo != nil {
+			w.commitLog.SetRepository(w.repo)
+		}
+		w.ShowToast("Committed " + hash[:7])
+	})
+	w.contentStack.AddNamed(w.stagingView.Root, "staging")
+
+	// --- Graph view ---
+	w.graphView = graphview.New(func(gc git.GraphCommit) {
+		slog.Info("graph commit selected", "hash", gc.ShortHash)
+	})
+	w.contentStack.AddNamed(w.graphView.Root, "graph")
+
+	// --- Merge view ---
+	w.mergeView = merge.New(
+		func(path string, content string) {
+			slog.Info("merge resolved", "path", path)
+			w.ShowToast("Resolved " + path)
+			w.contentStack.SetVisibleChildName("staging")
+		},
+		func() {
+			slog.Info("merge aborted")
+			w.ShowToast("Merge aborted")
+			w.contentStack.SetVisibleChildName("log")
+		},
+	)
+	w.contentStack.AddNamed(w.mergeView.Root, "merge")
 
 	// Set the welcome page as the visible child.
 	w.contentStack.SetVisibleChildName("welcome")
