@@ -70,13 +70,13 @@ func New() *GiTKApp {
 		cfg: cfg,
 	}
 
-	// Apply the user's preferred color scheme (light/dark/system).
-	gitkApp.applyTheme()
-
 	// "activate" is emitted when the application is launched (or when the
 	// user tries to launch a second instance — GTK ensures only one
 	// instance runs and re-activates the existing one).
 	gtkApp.ConnectActivate(func() {
+		// Apply theme on first activation — StyleManager requires GTK
+		// to be initialized, which only happens after the app starts.
+		gitkApp.applyTheme()
 		gitkApp.onActivate()
 	})
 
