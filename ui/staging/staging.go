@@ -2,13 +2,15 @@
 //
 // The staging area shows the current changes in the working tree split
 // into two groups:
-//   - Staged changes: files that are ready to be committed (git add).
 //   - Unstaged changes: modified files that haven't been staged yet.
+//   - Staged changes: files that are ready to be committed (git add).
 //
 // The view also includes:
 //   - A hunk-level diff viewer for the selected file.
 //   - Stage/unstage buttons for individual files.
 //   - A commit message area with subject + optional description.
+//   - An AI button to generate commit messages via Claude.
+//   - A stash button to stash current changes.
 //   - A commit button that is only enabled when files are staged and a
 //     message has been written.
 //   - Live updates when the repository state changes.
@@ -22,9 +24,12 @@
 package staging
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
+	"github.com/MedaiP90/GiTK/ai"
+	"github.com/MedaiP90/GiTK/config"
 	"github.com/MedaiP90/GiTK/git"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
@@ -41,6 +46,9 @@ type StagingView struct {
 
 	// repo is the current repository.
 	repo *git.Repository
+
+	// cfg is the app configuration for AI settings.
+	cfg *config.Config
 
 	// onCommitCreated is called after a successful commit.
 	onCommitCreated OnCommitCreated
@@ -63,6 +71,9 @@ type StagingView struct {
 	// commitBtn is the commit button.
 	commitBtn *gtk.Button
 
+	// aiBtn is the AI commit message generation button.
+	aiBtn *gtk.Button
+
 	// charCounter shows the subject line character count.
 	charCounter *gtk.Label
 
@@ -79,9 +90,11 @@ type StagingView struct {
 // New creates a new StagingView.
 //
 // Parameters:
+//   - cfg: the app configuration.
 //   - onCommitCreated: callback after a successful commit.
-func New(onCommitCreated OnCommitCreated) *StagingView {
+func New(cfg *config.Config, onCommitCreated OnCommitCreated) *StagingView {
 	sv := &StagingView{
+		cfg:             cfg,
 		onCommitCreated: onCommitCreated,
 	}
 
@@ -94,7 +107,7 @@ func (sv *StagingView) build() {
 	// --- File lists panel (left side) ---
 	filePanel := gtk.NewBox(gtk.OrientationVertical, 0)
 
-	// Stage all / Unstage all buttons in a header.
+	// Action buttons: Stage all / Unstage all / Stash.
 	actionBar := gtk.NewBox(gtk.OrientationHorizontal, 6)
 	actionBar.SetMarginTop(6)
 	actionBar.SetMarginBottom(6)
@@ -114,39 +127,28 @@ func (sv *StagingView) build() {
 	})
 	actionBar.Append(unstageAllBtn)
 
+	// Spacer.
+	spacer := gtk.NewBox(gtk.OrientationHorizontal, 0)
+	spacer.SetHExpand(true)
+	actionBar.Append(spacer)
+
+	// Stash button.
+	stashBtn := gtk.NewButtonFromIconName("sidebar-show-symbolic")
+	stashBtn.SetTooltipText("Stash Changes")
+	stashBtn.ConnectClicked(func() {
+		sv.showToast("Stash is not yet supported by the go-git backend")
+	})
+	actionBar.Append(stashBtn)
+
 	filePanel.Append(actionBar)
 
-	// --- Staged changes section ---
-	stagedLabel := gtk.NewLabel("Staged Changes")
-	stagedLabel.SetXAlign(0)
-	stagedLabel.AddCSSClass("heading")
-	stagedLabel.SetMarginTop(6)
-	stagedLabel.SetMarginStart(12)
-	filePanel.Append(stagedLabel)
-
-	sv.stagedListBox = gtk.NewListBox()
-	sv.stagedListBox.SetSelectionMode(gtk.SelectionSingle)
-	sv.stagedListBox.AddCSSClass("boxed-list")
-	sv.stagedListBox.SetMarginStart(12)
-	sv.stagedListBox.SetMarginEnd(12)
-	sv.stagedListBox.SetMarginBottom(6)
-
-	// Wire selection to show diff in hunk view.
-	sv.stagedListBox.ConnectRowSelected(func(row *gtk.ListBoxRow) {
-		if row != nil {
-			// Deselect in the other list box.
-			sv.unstagedListBox.UnselectAll()
-			sv.showDiffForSelectedRow(row, true)
-		}
-	})
-	filePanel.Append(sv.stagedListBox)
-
-	// --- Unstaged changes section ---
+	// --- Unstaged changes section (FIRST — above staged) ---
 	unstagedLabel := gtk.NewLabel("Unstaged Changes")
 	unstagedLabel.SetXAlign(0)
 	unstagedLabel.AddCSSClass("heading")
-	unstagedLabel.SetMarginTop(6)
+	unstagedLabel.SetMarginTop(12)
 	unstagedLabel.SetMarginStart(12)
+	unstagedLabel.SetMarginBottom(6)
 	filePanel.Append(unstagedLabel)
 
 	sv.unstagedListBox = gtk.NewListBox()
@@ -165,6 +167,32 @@ func (sv *StagingView) build() {
 		}
 	})
 	filePanel.Append(sv.unstagedListBox)
+
+	// --- Staged changes section (SECOND — below unstaged) ---
+	stagedLabel := gtk.NewLabel("Staged Changes")
+	stagedLabel.SetXAlign(0)
+	stagedLabel.AddCSSClass("heading")
+	stagedLabel.SetMarginTop(12)
+	stagedLabel.SetMarginStart(12)
+	stagedLabel.SetMarginBottom(6)
+	filePanel.Append(stagedLabel)
+
+	sv.stagedListBox = gtk.NewListBox()
+	sv.stagedListBox.SetSelectionMode(gtk.SelectionSingle)
+	sv.stagedListBox.AddCSSClass("boxed-list")
+	sv.stagedListBox.SetMarginStart(12)
+	sv.stagedListBox.SetMarginEnd(12)
+	sv.stagedListBox.SetMarginBottom(12)
+
+	// Wire selection to show diff in hunk view.
+	sv.stagedListBox.ConnectRowSelected(func(row *gtk.ListBoxRow) {
+		if row != nil {
+			// Deselect in the other list box.
+			sv.unstagedListBox.UnselectAll()
+			sv.showDiffForSelectedRow(row, true)
+		}
+	})
+	filePanel.Append(sv.stagedListBox)
 
 	// --- Commit message area ---
 	sv.buildCommitArea(filePanel)
@@ -251,17 +279,132 @@ func (sv *StagingView) buildCommitArea(parent *gtk.Box) {
 	descFrame.SetChild(sv.commitDescription)
 	commitBox.Append(descFrame)
 
+	// Buttons row: AI generate + Commit.
+	btnRow := gtk.NewBox(gtk.OrientationHorizontal, 6)
+	btnRow.SetMarginTop(6)
+
+	// AI commit message button — only visible if AI is enabled.
+	sv.aiBtn = gtk.NewButtonFromIconName("applications-science-symbolic")
+	sv.aiBtn.SetTooltipText("Generate commit message with AI")
+	sv.aiBtn.SetVisible(sv.cfg.AI.Enabled)
+	sv.aiBtn.ConnectClicked(func() {
+		sv.generateAICommitMessage()
+	})
+	btnRow.Append(sv.aiBtn)
+
+	// Spacer.
+	btnSpacer := gtk.NewBox(gtk.OrientationHorizontal, 0)
+	btnSpacer.SetHExpand(true)
+	btnRow.Append(btnSpacer)
+
 	// Commit button — disabled until files are staged and message is written.
 	sv.commitBtn = gtk.NewButtonWithLabel("Commit")
 	sv.commitBtn.AddCSSClass("suggested-action")
-	sv.commitBtn.SetMarginTop(6)
 	sv.commitBtn.SetSensitive(false)
 	sv.commitBtn.ConnectClicked(func() {
 		sv.doCommit()
 	})
-	commitBox.Append(sv.commitBtn)
+	btnRow.Append(sv.commitBtn)
+
+	commitBox.Append(btnRow)
 
 	parent.Append(commitBox)
+}
+
+// generateAICommitMessage uses Claude AI to generate a commit message
+// from the staged diff.
+func (sv *StagingView) generateAICommitMessage() {
+	if sv.repo == nil {
+		return
+	}
+	if !sv.cfg.AI.Enabled {
+		sv.showToast("AI features are disabled. Enable in Preferences.")
+		return
+	}
+
+	client := ai.NewClient(sv.cfg.AI.APIKey, sv.cfg.AI.Model)
+	if client == nil {
+		sv.showToast("AI not configured. Set API key in Preferences.")
+		return
+	}
+
+	sv.aiBtn.SetSensitive(false)
+	sv.showToast("Generating commit message…")
+
+	go func() {
+		// Get staged diffs.
+		diffs, err := sv.repo.DiffStaged()
+		if err != nil {
+			glib.IdleAdd(func() {
+				sv.aiBtn.SetSensitive(true)
+				sv.showToast("Failed to get staged diff: " + err.Error())
+			})
+			return
+		}
+
+		// Build diff text.
+		var diffText string
+		for _, d := range diffs {
+			diffText += "--- " + d.OldPath + "\n+++ " + d.NewPath + "\n"
+			for _, h := range d.Hunks {
+				diffText += h.Header + "\n"
+				for _, l := range h.Lines {
+					switch l.Type {
+					case git.DiffLineAdd:
+						diffText += "+" + l.Content + "\n"
+					case git.DiffLineDelete:
+						diffText += "-" + l.Content + "\n"
+					default:
+						diffText += " " + l.Content + "\n"
+					}
+				}
+			}
+		}
+
+		if diffText == "" {
+			glib.IdleAdd(func() {
+				sv.aiBtn.SetSensitive(true)
+				sv.showToast("No staged changes to analyze.")
+			})
+			return
+		}
+
+		msg, err := client.GenerateCommitMessage(context.Background(), diffText, sv.cfg.AI.SystemPrompt)
+		glib.IdleAdd(func() {
+			sv.aiBtn.SetSensitive(true)
+			if err != nil {
+				sv.showToast("AI failed: " + err.Error())
+				return
+			}
+
+			// Parse the message: first line is subject, rest is description.
+			lines := splitMessage(msg)
+			sv.commitSubject.SetText(lines[0])
+			if len(lines) > 1 {
+				sv.commitDescription.Buffer().SetText(lines[1])
+			}
+			sv.showToast("AI commit message generated")
+		})
+	}()
+}
+
+// splitMessage splits an AI-generated commit message into subject and body.
+func splitMessage(msg string) [2]string {
+	result := [2]string{}
+	for i, ch := range msg {
+		if ch == '\n' {
+			result[0] = msg[:i]
+			// Skip blank lines between subject and body.
+			body := msg[i+1:]
+			for len(body) > 0 && body[0] == '\n' {
+				body = body[1:]
+			}
+			result[1] = body
+			return result
+		}
+	}
+	result[0] = msg
+	return result
 }
 
 // SetRepository sets the current repository and refreshes the staging area.
@@ -274,6 +417,10 @@ func (sv *StagingView) SetRepository(repo *git.Repository) {
 	}
 
 	sv.repo = repo
+
+	// Update AI button visibility.
+	sv.aiBtn.SetVisible(sv.cfg.AI.Enabled)
+
 	sv.Refresh()
 
 	// Start a watcher for live updates.
@@ -321,17 +468,17 @@ func (sv *StagingView) Refresh() {
 	sv.hasStagedFiles = false
 
 	for _, change := range changes {
+		// Unstaged changes.
+		if change.Worktree != git.StatusUnmodified {
+			row := sv.createFileRow(change, false)
+			sv.unstagedListBox.Append(row)
+		}
+
 		// Staged changes.
 		if change.Staging != git.StatusUnmodified && change.Staging != git.FileStatusCode('?') {
 			row := sv.createFileRow(change, true)
 			sv.stagedListBox.Append(row)
 			sv.hasStagedFiles = true
-		}
-
-		// Unstaged changes.
-		if change.Worktree != git.StatusUnmodified {
-			row := sv.createFileRow(change, false)
-			sv.unstagedListBox.Append(row)
 		}
 	}
 

@@ -107,6 +107,23 @@ func drawGraph(da *gtk.DrawingArea, cr *cairo.Context, width, height int) {
 	c := gd.commit
 	centerY := float64(height) / 2.0
 
+	// --- Draw pass-through lane lines ---
+	// These are vertical lines for lanes that have a branch/commit
+	// passing through this row without a node here.
+	for _, lane := range c.ActiveLanes {
+		if lane == c.Lane {
+			continue // The commit's own lane is drawn by edges/node.
+		}
+		x := float64(lane)*laneWidth + laneWidth/2.0
+		color := laneColor(lane)
+		cr.SetSourceRGB(color[0], color[1], color[2])
+		cr.SetLineWidth(1.5)
+		cr.SetDash(nil, 0)
+		cr.MoveTo(x, 0)
+		cr.LineTo(x, float64(height))
+		cr.Stroke()
+	}
+
 	// --- Draw edges (lines from this commit to its parents) ---
 	for _, edge := range c.Edges {
 		drawEdge(cr, edge, centerY, height)

@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -127,9 +128,42 @@ func OpenRepository(path string) (*Repository, error) {
 	return r, nil
 }
 
+// RepoNameFromURL extracts the repository name from a clone URL.
+// For example, "https://github.com/user/repo.git" returns "repo".
+// Returns empty string if the name cannot be determined.
+func RepoNameFromURL(url string) string {
+	// Remove trailing slashes.
+	u := strings.TrimRight(url, "/")
+
+	// Get the last path component.
+	lastSlash := strings.LastIndex(u, "/")
+	if lastSlash == -1 {
+		// Try colon (SSH format: git@host:user/repo.git).
+		lastSlash = strings.LastIndex(u, ":")
+	}
+
+	name := u
+	if lastSlash >= 0 && lastSlash < len(u)-1 {
+		name = u[lastSlash+1:]
+	}
+
+	// Remove .git suffix.
+	name = strings.TrimSuffix(name, ".git")
+
+	if name == "" {
+		return ""
+	}
+	return name
+}
+
 // CloneRepository clones a remote repository to the given local path.
 // The progress callback is called periodically with a status message
 // so the UI can show clone progress.
+//
+// If destPath is a directory that already exists and is not empty,
+// the repository name is extracted from the URL and a subdirectory
+// is created under destPath. If destPath does not exist, it is used
+// directly as the clone target.
 //
 // Parameters:
 //   - url:       the remote URL to clone from (HTTPS or SSH).
@@ -140,7 +174,24 @@ func OpenRepository(path string) (*Repository, error) {
 //
 //	repo, err := git.CloneRepository("https://github.com/user/repo.git", "/tmp/repo", nil)
 func CloneRepository(url, destPath string, progress func(string)) (*Repository, error) {
-	slog.Info("cloning repository", "url", url, "dest", destPath)
+	// Resolve absolute path first.
+	absPath, err := filepath.Abs(destPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve absolute path: %w", err)
+	}
+
+	// If the destination exists and is a directory, append the repo name
+	// to create a subdirectory (like `git clone` does).
+	info, err := os.Stat(absPath)
+	if err == nil && info.IsDir() {
+		repoName := RepoNameFromURL(url)
+		if repoName == "" {
+			return nil, fmt.Errorf("clone: cannot determine repository name from URL %q", url)
+		}
+		absPath = filepath.Join(absPath, repoName)
+	}
+
+	slog.Info("cloning repository", "url", url, "dest", absPath)
 
 	// Set up progress reporting if a callback was provided.
 	var progressWriter *progressReporter
@@ -155,14 +206,9 @@ func CloneRepository(url, destPath string, progress func(string)) (*Repository, 
 		opts.Progress = progressWriter
 	}
 
-	repo, err := gogit.PlainClone(destPath, false, opts)
+	repo, err := gogit.PlainClone(absPath, false, opts)
 	if err != nil {
-		return nil, fmt.Errorf("clone %q: %w", url, err)
-	}
-
-	absPath, err := filepath.Abs(destPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve absolute path: %w", err)
+		return nil, fmt.Errorf("clone %q to %q: %w", url, absPath, err)
 	}
 
 	r := &Repository{

@@ -25,6 +25,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/MedaiP90/GiTK/config"
 	"github.com/MedaiP90/GiTK/git"
@@ -76,9 +77,6 @@ type Window struct {
 	// commitDetail is the commit detail panel (right side).
 	commitDetail *commitdetail.CommitDetail
 
-	// diffView is the inline diff viewer.
-	diffView *commitdetail.DiffView
-
 	// stagingView is the staging area view.
 	stagingView *staging.StagingView
 
@@ -89,6 +87,7 @@ type Window struct {
 	// so we can update their active state and add badges.
 	logBtn     *gtk.ToggleButton
 	stagingBtn *gtk.ToggleButton
+	stashBtn   *gtk.Button
 
 	// repo is the currently open git repository (nil if none).
 	repo *git.Repository
@@ -163,7 +162,7 @@ func (w *Window) ShowToast(message string) {
 //
 // Layout:
 //
-//	[Open] [Clone]    [Log] [Staging]    GiTK    [Fetch] [Pull] [Push]  [≡]
+//	[Open] [Clone]  |  [Log] [Staging] [Stash]    GiTK    [Fetch] [Pull] [Push]  [≡]
 //
 // The left side has buttons for opening/cloning repos and view switchers.
 // The right side has remote operations and the primary menu.
@@ -178,13 +177,19 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	})
 	header.PackStart(openBtn)
 
-	// Clone button uses a cloud icon per user request.
-	cloneBtn := gtk.NewButtonFromIconName("weather-few-clouds-symbolic")
+	// Clone button uses a download icon.
+	cloneBtn := gtk.NewButtonFromIconName("folder-download-symbolic")
 	cloneBtn.SetTooltipText("Clone Repository")
 	cloneBtn.ConnectClicked(func() {
 		w.onCloneRepository()
 	})
 	header.PackStart(cloneBtn)
+
+	// --- Spacer between clone and view switcher ---
+	spacer := gtk.NewSeparator(gtk.OrientationVertical)
+	spacer.SetMarginStart(6)
+	spacer.SetMarginEnd(6)
+	header.PackStart(spacer)
 
 	// --- View switcher buttons ---
 	// These toggle between the main views: Log and Staging.
@@ -192,7 +197,8 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	w.logBtn = gtk.NewToggleButton()
 	w.logBtn.SetIconName("view-list-symbolic")
 	w.logBtn.SetTooltipText("Commit Log")
-	w.logBtn.SetActive(true)
+	w.logBtn.SetActive(false)
+	w.logBtn.SetSensitive(false) // Disabled until a repo is selected.
 	w.logBtn.ConnectClicked(func() {
 		if w.repo != nil {
 			w.switchToView("log")
@@ -200,10 +206,11 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	})
 	header.PackStart(w.logBtn)
 
-	// Staging button wrapped in an overlay to support a badge indicator.
+	// Staging button with badge support.
 	w.stagingBtn = gtk.NewToggleButton()
 	w.stagingBtn.SetIconName("document-edit-symbolic")
 	w.stagingBtn.SetTooltipText("Staging Area")
+	w.stagingBtn.SetSensitive(false) // Disabled until a repo is selected.
 	w.stagingBtn.ConnectClicked(func() {
 		if w.repo != nil {
 			w.stagingView.SetRepository(w.repo)
@@ -211,6 +218,17 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 		}
 	})
 	header.PackStart(w.stagingBtn)
+
+	// Stash button — opens the stash management dialog.
+	w.stashBtn = gtk.NewButtonFromIconName("sidebar-show-symbolic")
+	w.stashBtn.SetTooltipText("Stash")
+	w.stashBtn.SetSensitive(false) // Disabled until a repo is selected.
+	w.stashBtn.ConnectClicked(func() {
+		dialogs.ShowStashDialog(w.window, func(msg string) {
+			w.ShowToast(msg)
+		})
+	})
+	header.PackStart(w.stashBtn)
 
 	// --- Right side: Primary menu ---
 	menuBtn := w.buildPrimaryMenu()
@@ -283,41 +301,107 @@ func (w *Window) buildPrimaryMenu() *gtk.MenuButton {
 	// declaratively — each item references a GAction by name.
 	menu := newMenu()
 
-	// Section 1: Repository actions
-	repoSection := newMenu()
-	repoSection.Append("Create Tag\u2026", "win.create-tag")
-	repoSection.Append("Stash\u2026", "win.stash")
-	repoSection.Append("Fetch All", "win.fetch")
-	menu.AppendSection("", repoSection)
-
-	// Section 2: Theme selection (light, dark, system).
+	// Section 1: Theme selection with custom widget placeholder.
 	themeSection := newMenu()
-	themeSection.Append("System Theme", "win.theme::system")
-	themeSection.Append("Light Theme", "win.theme::light")
-	themeSection.Append("Dark Theme", "win.theme::dark")
+	themeItem := gio.NewMenuItem("", "")
+	themeItem.SetAttributeValue("custom", glib.NewVariantString("theme"))
+	themeSection.AppendItem(themeItem)
 	menu.AppendSection("Appearance", themeSection)
 
-	// Section 3: View actions
+	// Section 2: View actions
 	viewSection := newMenu()
 	viewSection.Append("Keyboard Shortcuts", "app.shortcuts")
 	menu.AppendSection("", viewSection)
 
-	// Section 4: Application actions
+	// Section 3: Application actions
 	appSection := newMenu()
 	appSection.Append("Preferences", "app.preferences")
 	appSection.Append("About GiTK", "app.about")
 	appSection.Append("Quit", "app.quit")
 	menu.AppendSection("", appSection)
 
+	// Create the PopoverMenu from model.
+	popover := gtk.NewPopoverMenuFromModel(menu)
+
+	// Add custom theme selector widget.
+	themeWidget := w.buildThemeSelector()
+	popover.AddChild(themeWidget, "theme")
+
 	// Create the menu button with a hamburger icon.
 	menuBtn := gtk.NewMenuButton()
 	menuBtn.SetIconName("open-menu-symbolic")
-	menuBtn.SetMenuModel(menu)
+	menuBtn.SetPopover(popover)
 	menuBtn.SetTooltipText("Main Menu")
-	// Use a popover (not a popup window) per GNOME HIG.
 	menuBtn.SetPrimary(true)
 
 	return menuBtn
+}
+
+// buildThemeSelector creates the GNOME-style theme selector with 3 circles.
+func (w *Window) buildThemeSelector() gtk.Widgetter {
+	box := gtk.NewBox(gtk.OrientationHorizontal, 12)
+	box.SetHAlign(gtk.AlignCenter)
+	box.SetMarginTop(8)
+	box.SetMarginBottom(8)
+	box.SetMarginStart(12)
+	box.SetMarginEnd(12)
+
+	// System theme button.
+	systemBtn := w.createThemeCircle("System", "system", "preferences-desktop-appearance-symbolic")
+	box.Append(systemBtn)
+
+	// Light theme button.
+	lightBtn := w.createThemeCircle("Light", "light", "display-brightness-symbolic")
+	box.Append(lightBtn)
+
+	// Dark theme button.
+	darkBtn := w.createThemeCircle("Dark", "dark", "weather-clear-night-symbolic")
+	box.Append(darkBtn)
+
+	return box
+}
+
+// createThemeCircle creates a single theme selector button.
+func (w *Window) createThemeCircle(label, theme, iconName string) *gtk.Box {
+	btnBox := gtk.NewBox(gtk.OrientationVertical, 4)
+	btnBox.SetHAlign(gtk.AlignCenter)
+
+	btn := gtk.NewButton()
+	btn.SetSizeRequest(56, 56)
+	btn.AddCSSClass("circular")
+
+	// Set icon.
+	icon := gtk.NewImageFromIconName(iconName)
+	icon.SetIconSize(gtk.IconSizeLarge)
+	btn.SetChild(icon)
+
+	// Style based on theme.
+	switch theme {
+	case "light":
+		btn.AddCSSClass("light-theme-btn")
+	case "dark":
+		btn.AddCSSClass("dark-theme-btn")
+	default:
+		btn.AddCSSClass("system-theme-btn")
+	}
+
+	// Highlight current theme.
+	if w.cfg.Theme == theme || (w.cfg.Theme == "" && theme == "system") {
+		btn.AddCSSClass("suggested-action")
+	}
+
+	btn.ConnectClicked(func() {
+		w.gitkApp.SetTheme(theme)
+	})
+
+	lbl := gtk.NewLabel(label)
+	lbl.AddCSSClass("caption")
+	lbl.AddCSSClass("dim-label")
+
+	btnBox.Append(btn)
+	btnBox.Append(lbl)
+
+	return btnBox
 }
 
 // newMenu is a helper that creates a new GMenu (GIO menu model).
@@ -338,7 +422,7 @@ func (w *Window) buildContentArea() {
 
 	// --- Content area ---
 	// The content area uses a GtkStack to switch between views:
-	// "welcome" (no repo open), "log" (commit log), "graph" (DAG view),
+	// "welcome" (no repo open), "log" (commit log),
 	// "staging" (staging area).
 	w.contentStack = gtk.NewStack()
 	w.contentStack.SetTransitionType(gtk.StackTransitionTypeCrossfade)
@@ -358,14 +442,7 @@ func (w *Window) buildContentArea() {
 	})
 
 	// --- Commit detail panel ---
-	w.commitDetail = commitdetail.New(func(diff git.DiffResult) {
-		// When a file is selected, show the diff.
-		w.diffView.SetDiff(diff)
-		w.contentStack.SetVisibleChildName("diff")
-	})
-
-	// --- Diff view ---
-	w.diffView = commitdetail.NewDiffView()
+	w.commitDetail = commitdetail.New(w.cfg)
 
 	// Combine commit log + detail into a horizontal split.
 	logDetailSplit := gtk.NewPaned(gtk.OrientationHorizontal)
@@ -376,10 +453,9 @@ func (w *Window) buildContentArea() {
 	logDetailSplit.SetShrinkEndChild(false)
 
 	w.contentStack.AddNamed(logDetailSplit, "log")
-	w.contentStack.AddNamed(w.diffView.Root, "diff")
 
 	// --- Staging view ---
-	w.stagingView = staging.New(func(hash string) {
+	w.stagingView = staging.New(w.cfg, func(hash string) {
 		// After a commit, refresh the log.
 		if w.repo != nil {
 			w.commitLog.SetRepository(w.repo)
@@ -428,9 +504,16 @@ func (w *Window) buildContentArea() {
 func (w *Window) onRepoSelected(repo *git.Repository) {
 	w.repo = repo
 	w.sidebar.SetRepository(repo)
+	w.sidebar.CollapseRecentRepos()
 	w.commitLog.SetRepository(repo)
 	w.commitDetail.SetRepository(repo)
 	w.window.SetTitle("GiTK — " + repo.Name())
+
+	// Enable view switcher buttons now that a repo is open.
+	w.logBtn.SetSensitive(true)
+	w.stagingBtn.SetSensitive(true)
+	w.stashBtn.SetSensitive(true)
+
 	w.switchToView("log")
 	w.ShowToast("Opened " + repo.Name())
 	w.updateStagingBadge()
@@ -493,57 +576,32 @@ func (w *Window) registerWindowActions() {
 	})
 	w.window.AddAction(openAction)
 
-	// Create Tag action.
-	tagAction := gio.NewSimpleAction("create-tag", nil)
+	// Create Tag action — used by commit log right-click context menu.
+	tagAction := gio.NewSimpleAction("create-tag", glib.NewVariantType("s"))
 	tagAction.ConnectActivate(func(param *glib.Variant) {
-		if w.repo != nil {
-			dialogs.ShowCreateTagDialog(w.window, w.repo, "", func(msg string) {
-				w.ShowToast(msg)
-				w.sidebar.RefreshBranches()
-			})
+		if w.repo == nil {
+			return
 		}
-	})
-	w.window.AddAction(tagAction)
-
-	// Stash action.
-	stashAction := gio.NewSimpleAction("stash", nil)
-	stashAction.ConnectActivate(func(param *glib.Variant) {
-		dialogs.ShowStashDialog(w.window, func(msg string) {
+		commitHash := ""
+		if param != nil {
+			commitHash = strings.Trim(param.String(), "'\"")
+		}
+		dialogs.ShowCreateTagDialog(w.window, w.repo, commitHash, func(msg string) {
 			w.ShowToast(msg)
+			w.sidebar.RefreshBranches()
 		})
 	})
-	w.window.AddAction(stashAction)
+	w.window.AddAction(tagAction)
 
 	// Theme action — takes a string parameter ("system", "light", "dark").
 	themeAction := gio.NewSimpleAction("theme", glib.NewVariantType("s"))
 	themeAction.ConnectActivate(func(param *glib.Variant) {
 		if param != nil {
-			theme := param.String()
+			theme := strings.Trim(param.String(), "'\"")
 			w.gitkApp.SetTheme(theme)
 		}
 	})
 	w.window.AddAction(themeAction)
-
-	// Fetch All action.
-	fetchAction := gio.NewSimpleAction("fetch", nil)
-	fetchAction.ConnectActivate(func(param *glib.Variant) {
-		if w.repo == nil {
-			return
-		}
-		go func() {
-			err := w.repo.Fetch()
-			glib.IdleAdd(func() {
-				if err != nil {
-					w.ShowToast("Fetch failed: " + err.Error())
-					return
-				}
-				w.ShowToast("Fetched from origin")
-				w.sidebar.RefreshBranches()
-				w.commitLog.SetRepository(w.repo)
-			})
-		}()
-	})
-	w.window.AddAction(fetchAction)
 }
 
 // onOpenRepository handles the "Open Repository" action. It shows a native

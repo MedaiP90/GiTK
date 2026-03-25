@@ -28,6 +28,7 @@ import (
 	"github.com/MedaiP90/GiTK/config"
 	"github.com/MedaiP90/GiTK/git"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
+	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
 
@@ -190,6 +191,12 @@ func (s *Sidebar) SetRepository(repo *git.Repository) {
 	}
 }
 
+// CollapseRecentRepos collapses the recent repositories expander to give
+// more space to the branch tree below.
+func (s *Sidebar) CollapseRecentRepos() {
+	s.recentExpander.SetExpanded(false)
+}
+
 // RefreshRecent updates the recent repositories list from config.
 func (s *Sidebar) RefreshRecent() {
 	// Remove previously added rows.
@@ -214,6 +221,7 @@ func (s *Sidebar) RefreshRecent() {
 	for i, path := range recents {
 		row := NewRepoRow(path)
 		idx := i // capture for closure
+		repoPath := path
 		row.SetActivatable(true)
 		row.ConnectActivated(func() {
 			paths := s.cfg.GetRecentRepositories()
@@ -221,6 +229,29 @@ func (s *Sidebar) RefreshRecent() {
 				s.openRepo(paths[idx])
 			}
 		})
+
+		// Check if repo is dirty (has uncommitted changes) in background.
+		go func(p string, r *adw.ActionRow) {
+			repo, err := git.OpenRepository(p)
+			if err != nil {
+				return
+			}
+			changes, err := repo.Status()
+			if err != nil {
+				return
+			}
+			if len(changes) > 0 {
+				glib.IdleAdd(func() {
+					// Add a badge suffix to indicate dirty state.
+					badge := gtk.NewLabel(fmt.Sprintf("%d", len(changes)))
+					badge.AddCSSClass("accent")
+					badge.AddCSSClass("caption")
+					badge.SetVAlign(gtk.AlignCenter)
+					r.AddSuffix(badge)
+				})
+			}
+		}(repoPath, row)
+
 		s.recentExpander.AddRow(row)
 		s.recentRows = append(s.recentRows, row)
 	}

@@ -15,6 +15,8 @@ package dialogs
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 
 	"github.com/MedaiP90/GiTK/git"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
@@ -78,7 +80,12 @@ func (d *CloneDialog) build() {
 
 	// --- Destination entry with folder picker ---
 	d.destEntry = adw.NewEntryRow()
-	d.destEntry.SetTitle("Destination Path")
+	d.destEntry.SetTitle("Destination Folder")
+
+	// Set default destination to user's home directory.
+	if home, err := os.UserHomeDir(); err == nil {
+		d.destEntry.SetText(home)
+	}
 
 	// Folder picker button as a suffix on the dest entry.
 	browseBtn := gtk.NewButtonFromIconName("folder-open-symbolic")
@@ -96,7 +103,7 @@ func (d *CloneDialog) build() {
 	// --- Form layout ---
 	formGroup := adw.NewPreferencesGroup()
 	formGroup.SetTitle("Clone Repository")
-	formGroup.SetDescription("Enter the URL of the Git repository to clone.")
+	formGroup.SetDescription("Enter the URL and choose a destination folder.\nThe repository will be cloned into a subdirectory named after the project.")
 	formGroup.Add(d.urlEntry)
 	formGroup.Add(d.destEntry)
 
@@ -137,8 +144,8 @@ func (d *CloneDialog) build() {
 	// --- Create the AdwDialog ---
 	d.dialog = adw.NewDialog()
 	d.dialog.SetTitle("Clone Repository")
-	d.dialog.SetContentWidth(450)
-	d.dialog.SetContentHeight(300)
+	d.dialog.SetContentWidth(500)
+	d.dialog.SetContentHeight(350)
 	d.dialog.SetChild(content)
 }
 
@@ -146,6 +153,18 @@ func (d *CloneDialog) build() {
 func (d *CloneDialog) pickDestination() {
 	fileDialog := gtk.NewFileDialog()
 	fileDialog.SetTitle("Choose Clone Destination")
+
+	// Set initial folder to current destination entry value if it exists.
+	currentDest := d.destEntry.Text()
+	if currentDest != "" {
+		absPath, err := filepath.Abs(currentDest)
+		if err == nil {
+			if info, err := os.Stat(absPath); err == nil && info.IsDir() {
+				initialFolder := gio.NewFileForPath(absPath)
+				fileDialog.SetInitialFolder(initialFolder)
+			}
+		}
+	}
 
 	fileDialog.SelectFolder(context.Background(), &d.parent.Window, func(result gio.AsyncResulter) {
 		file, err := fileDialog.SelectFolderFinish(result)
@@ -168,7 +187,39 @@ func (d *CloneDialog) onClone() {
 		return
 	}
 	if dest == "" {
-		d.showError("Please choose a destination path.")
+		d.showError("Please choose a destination folder.")
+		return
+	}
+
+	// Resolve the destination to an absolute path.
+	absDest, err := filepath.Abs(dest)
+	if err != nil {
+		d.showError("Invalid destination path: " + err.Error())
+		return
+	}
+
+	// Verify that the destination directory exists.
+	info, err := os.Stat(absDest)
+	if err != nil {
+		d.showError("Destination folder does not exist: " + absDest)
+		return
+	}
+	if !info.IsDir() {
+		d.showError("Destination is not a folder: " + absDest)
+		return
+	}
+
+	// Show what the final clone path will be.
+	repoName := git.RepoNameFromURL(url)
+	if repoName == "" {
+		d.showError("Cannot determine repository name from URL.")
+		return
+	}
+	finalPath := filepath.Join(absDest, repoName)
+
+	// Check if the target directory already exists.
+	if _, err := os.Stat(finalPath); err == nil {
+		d.showError("Directory already exists: " + finalPath)
 		return
 	}
 
@@ -178,15 +229,13 @@ func (d *CloneDialog) onClone() {
 	d.spinner.Start()
 	d.errorBanner.SetRevealed(false)
 
-	slog.Info("starting clone", "url", url, "dest", dest)
+	slog.Info("starting clone", "url", url, "dest", absDest, "finalPath", finalPath)
 
 	// Run the clone in a background goroutine.
 	go func() {
-		repo, err := git.CloneRepository(url, dest, nil)
+		repo, err := git.CloneRepository(url, absDest, nil)
 
 		// All GTK updates must happen on the main thread.
-		// glib.IdleAdd schedules a function to run on the next iteration
-		// of the GTK main loop.
 		glib.IdleAdd(func() {
 			d.spinner.Stop()
 			d.spinner.SetVisible(false)
@@ -198,7 +247,7 @@ func (d *CloneDialog) onClone() {
 				return
 			}
 
-			slog.Info("clone completed", "url", url, "dest", dest)
+			slog.Info("clone completed", "url", url, "path", repo.Path())
 
 			// Close the dialog and notify the caller.
 			d.dialog.Close()

@@ -72,6 +72,11 @@ type GraphCommit struct {
 
 	// ParentHashes is the list of parent commit hashes.
 	ParentHashes []string
+
+	// ActiveLanes lists all lane indices that have a vertical line
+	// passing through this row (including the commit's own lane).
+	// The renderer uses this to draw pass-through lane lines.
+	ActiveLanes []int
 }
 
 // GraphEdge describes a line to draw from this commit's lane to a
@@ -355,6 +360,15 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 			activeLanes[lane] = ""
 		}
 
+		// Compute active lanes — all lanes that have a line running through
+		// this row (occupied lanes).
+		var active []int
+		for l, waitingFor := range activeLanes {
+			if waitingFor != "" {
+				active = append(active, l)
+			}
+		}
+
 		// Build the GraphCommit.
 		gc := GraphCommit{
 			Hash:         ci.Hash,
@@ -369,6 +383,7 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 			IsMerge:      ci.IsMerge,
 			IsHead:       ci.Hash == headHash,
 			ParentHashes: ci.ParentHashes,
+			ActiveLanes:  active,
 		}
 
 		result = append(result, gc)

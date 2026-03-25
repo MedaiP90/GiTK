@@ -532,6 +532,28 @@ func (r *Repository) CreateTag(name, commitHash, message string) error {
 	return nil
 }
 
+// PushTag pushes a single tag to the specified remote.
+func (r *Repository) PushTag(name, remoteName string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if remoteName == "" {
+		remoteName = "origin"
+	}
+
+	refSpec := config.RefSpec(fmt.Sprintf("refs/tags/%s:refs/tags/%s", name, name))
+	err := r.repo.Push(&gogit.PushOptions{
+		RemoteName: remoteName,
+		RefSpecs:   []config.RefSpec{refSpec},
+	})
+	if err != nil && err != gogit.NoErrAlreadyUpToDate {
+		return fmt.Errorf("push tag %q to %s: %w", name, remoteName, err)
+	}
+
+	slog.Info("tag pushed", "name", name, "remote", remoteName)
+	return nil
+}
+
 // DeleteTag deletes a local tag.
 func (r *Repository) DeleteTag(name string) error {
 	r.mu.Lock()

@@ -2,7 +2,6 @@
 //
 // The preferences window follows GNOME HIG with preference groups for:
 //   - Git (identity, fetch behavior, pruning)
-//   - Graph Settings (max commits, show tags, show remotes)
 //   - AI Settings (enable/disable, API key, model dropdown)
 //
 // Changes are saved to the config file when the window is closed.
@@ -90,32 +89,6 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 	gitPage.Add(fetchGroup)
 	win.Add(gitPage)
 
-	// --- Graph Settings Page ---
-	graphPage := adw.NewPreferencesPage()
-	graphPage.SetTitle("Graph")
-	graphPage.SetIconName("view-list-symbolic")
-
-	graphGroup := adw.NewPreferencesGroup()
-	graphGroup.SetTitle("Graph View Settings")
-
-	maxCommitsRow := adw.NewEntryRow()
-	maxCommitsRow.SetTitle("Maximum Commits")
-	maxCommitsRow.SetText(fmt.Sprintf("%d", cfg.Graph.MaxCommits))
-	graphGroup.Add(maxCommitsRow)
-
-	showTagsRow := adw.NewSwitchRow()
-	showTagsRow.SetTitle("Show Tags")
-	showTagsRow.SetActive(cfg.Graph.ShowTags)
-	graphGroup.Add(showTagsRow)
-
-	showRemotesRow := adw.NewSwitchRow()
-	showRemotesRow.SetTitle("Show Remote Branches")
-	showRemotesRow.SetActive(cfg.Graph.ShowRemotes)
-	graphGroup.Add(showRemotesRow)
-
-	graphPage.Add(graphGroup)
-	win.Add(graphPage)
-
 	// --- AI Settings Page ---
 	aiPage := adw.NewPreferencesPage()
 	aiPage.SetTitle("AI")
@@ -171,12 +144,6 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 			cfg.Git.AutoFetchInterval = interval
 		}
 		cfg.Git.PruneOnFetch = pruneRow.Active()
-
-		if maxCommits, err := strconv.Atoi(maxCommitsRow.Text()); err == nil && maxCommits > 0 {
-			cfg.Graph.MaxCommits = maxCommits
-		}
-		cfg.Graph.ShowTags = showTagsRow.Active()
-		cfg.Graph.ShowRemotes = showRemotesRow.Active()
 
 		cfg.AI.Enabled = aiEnabledRow.Active()
 		cfg.AI.APIKey = apiKeyRow.Text()

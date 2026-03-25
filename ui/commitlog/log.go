@@ -12,7 +12,7 @@
 // The commit log supports:
 //   - Clicking a row to load the commit detail view.
 //   - Filtering by message, author, or hash via GtkSearchEntry.
-//   - Filtering by branch/tag.
+//   - Right-click context menu for tag creation on a commit.
 //
 // GtkColumnView requires a data model (GtkSelectionModel wrapping a
 // GtkListModel). We use a GtkStringList as a simple list model where
@@ -29,6 +29,8 @@ import (
 	"github.com/MedaiP90/GiTK/git"
 	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
+	"github.com/diamondburned/gotk4/pkg/gio/v2"
+	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
 
@@ -45,6 +47,9 @@ type CommitLog struct {
 
 	// commits is the list of commits currently displayed.
 	commits []git.CommitInfo
+
+	// allCommits is the full (unfiltered) commit list.
+	allCommits []git.CommitInfo
 
 	// commitMap maps hash → CommitInfo for quick lookup during binding.
 	commitMap map[string]git.CommitInfo
@@ -149,6 +154,9 @@ func (cl *CommitLog) build() {
 		cl.applyFilter(cl.searchEntry.Text())
 	})
 
+	// --- Right-click context menu ---
+	cl.setupContextMenu()
+
 	// Scrolled window for the table.
 	scrolled := gtk.NewScrolledWindow()
 	scrolled.SetChild(cl.columnView)
@@ -162,6 +170,49 @@ func (cl *CommitLog) build() {
 	// Assemble into toolbar view.
 	cl.Root = adw.NewToolbarView()
 	cl.Root.SetContent(contentBox)
+}
+
+// setupContextMenu adds a right-click context menu to the column view
+// for creating tags on the selected commit.
+func (cl *CommitLog) setupContextMenu() {
+	// Build the context menu model.
+	menu := gio.NewMenu()
+	menu.Append("Create Tag…", "win.create-tag")
+
+	// Create a popover menu.
+	popover := gtk.NewPopoverMenuFromModel(menu)
+	popover.SetParent(cl.columnView)
+	popover.SetHasArrow(false)
+
+	// Right-click gesture.
+	gesture := gtk.NewGestureClick()
+	gesture.SetButton(3) // Right mouse button.
+	gesture.ConnectReleased(func(nPress int, x, y float64) {
+		// Find which row was right-clicked.
+		pos := cl.selection.Selected()
+		if int(pos) < len(cl.commits) {
+			commit := cl.commits[pos]
+
+			// Update the action target to include the commit hash.
+			menu2 := gio.NewMenu()
+			item := gio.NewMenuItem("Create Tag on "+commit.ShortHash+"…", "")
+			item.SetActionAndTargetValue("win.create-tag", glib.NewVariantString(commit.Hash))
+			menu2.AppendItem(item)
+			popover.SetMenuModel(menu2)
+
+			// Position the popover at the click location.
+			rect := &gdk4Rectangle{x: int(x), y: int(y), width: 1, height: 1}
+			_ = rect // We'll use SetPointingTo
+			popover.Present()
+		}
+	})
+	cl.columnView.AddController(gesture)
+}
+
+// gdk4Rectangle is a helper for popover positioning (not directly needed
+// since Present() shows at current pointer position).
+type gdk4Rectangle struct {
+	x, y, width, height int
 }
 
 // SetRepository loads commits from the given repository.
@@ -190,6 +241,7 @@ func (cl *CommitLog) Refresh() {
 	}
 	cl.graphCommits = graphCommits
 
+	cl.allCommits = commits
 	cl.setCommits(commits)
 }
 
@@ -227,13 +279,13 @@ func (cl *CommitLog) applyFilter(query string) {
 
 	if query == "" {
 		// No filter — show all commits.
-		cl.setCommits(cl.commits)
+		cl.setCommits(cl.allCommits)
 		return
 	}
 
 	// Filter commits by message, author, or hash.
 	var filtered []git.CommitInfo
-	for _, c := range cl.commits {
+	for _, c := range cl.allCommits {
 		if strings.Contains(strings.ToLower(c.Subject), query) ||
 			strings.Contains(strings.ToLower(c.Author), query) ||
 			strings.Contains(strings.ToLower(c.Hash), query) {

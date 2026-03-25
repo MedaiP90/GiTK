@@ -6,10 +6,12 @@ import (
 
 	"github.com/MedaiP90/GiTK/git"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
+	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
 
 // ShowCreateTagDialog shows the dialog for creating a new tag.
+// After creation, the tag is automatically pushed to the remote.
 //
 // Parameters:
 //   - parent: the parent window.
@@ -20,7 +22,11 @@ func ShowCreateTagDialog(parent *adw.ApplicationWindow, repo *git.Repository, co
 	dialog := adw.NewDialog()
 	dialog.SetTitle("Create Tag")
 	dialog.SetContentWidth(400)
-	dialog.SetContentHeight(300)
+	dialog.SetContentHeight(350)
+
+	// Error banner.
+	errorBanner := adw.NewBanner("")
+	errorBanner.SetRevealed(false)
 
 	// Tag name.
 	nameEntry := adw.NewEntryRow()
@@ -41,15 +47,19 @@ func ShowCreateTagDialog(parent *adw.ApplicationWindow, repo *git.Repository, co
 
 	group := adw.NewPreferencesGroup()
 	group.SetTitle("New Tag")
-	group.SetDescription("Leave message empty for a lightweight tag.")
+	group.SetDescription("The tag will be created locally and pushed to the remote automatically.")
 	group.Add(nameEntry)
 	group.Add(messageEntry)
 	group.Add(targetEntry)
 
+	// Spinner for push progress.
+	spinner := gtk.NewSpinner()
+	spinner.SetVisible(false)
+
 	cancelBtn := gtk.NewButtonWithLabel("Cancel")
 	cancelBtn.ConnectClicked(func() { dialog.Close() })
 
-	createBtn := gtk.NewButtonWithLabel("Create Tag")
+	createBtn := gtk.NewButtonWithLabel("Create & Push Tag")
 	createBtn.AddCSSClass("suggested-action")
 	createBtn.ConnectClicked(func() {
 		name := nameEntry.Text()
@@ -57,6 +67,8 @@ func ShowCreateTagDialog(parent *adw.ApplicationWindow, repo *git.Repository, co
 		target := targetEntry.Text()
 
 		if name == "" {
+			errorBanner.SetTitle("Please enter a tag name.")
+			errorBanner.SetRevealed(true)
 			return
 		}
 
@@ -65,25 +77,57 @@ func ShowCreateTagDialog(parent *adw.ApplicationWindow, repo *git.Repository, co
 			target = ""
 		}
 
-		err := repo.CreateTag(name, target, message)
-		dialog.Close()
+		// Disable UI during operation.
+		createBtn.SetSensitive(false)
+		cancelBtn.SetSensitive(false)
+		spinner.SetVisible(true)
+		spinner.Start()
+		errorBanner.SetRevealed(false)
 
-		if err != nil {
-			slog.Warn("create tag failed", "name", name, "error", err)
-			if onDone != nil {
-				onDone("Failed to create tag: " + err.Error())
+		// Run in background goroutine.
+		go func() {
+			// Step 1: Create the tag locally.
+			err := repo.CreateTag(name, target, message)
+			if err != nil {
+				glib.IdleAdd(func() {
+					spinner.Stop()
+					spinner.SetVisible(false)
+					createBtn.SetSensitive(true)
+					cancelBtn.SetSensitive(true)
+					slog.Warn("create tag failed", "name", name, "error", err)
+					errorBanner.SetTitle("Failed to create tag: " + err.Error())
+					errorBanner.SetRevealed(true)
+				})
+				return
 			}
-			return
-		}
 
-		if onDone != nil {
-			onDone("Created tag " + name)
-		}
+			// Step 2: Push the tag to remote.
+			pushErr := repo.PushTag(name, "origin")
+
+			glib.IdleAdd(func() {
+				spinner.Stop()
+				spinner.SetVisible(false)
+				dialog.Close()
+
+				if pushErr != nil {
+					slog.Warn("push tag failed", "name", name, "error", pushErr)
+					if onDone != nil {
+						onDone("Tag " + name + " created locally but push failed: " + pushErr.Error())
+					}
+					return
+				}
+
+				if onDone != nil {
+					onDone("Created and pushed tag " + name)
+				}
+			})
+		}()
 	})
 
 	btnBox := gtk.NewBox(gtk.OrientationHorizontal, 12)
 	btnBox.SetHAlign(gtk.AlignEnd)
 	btnBox.SetMarginTop(18)
+	btnBox.Append(spinner)
 	btnBox.Append(cancelBtn)
 	btnBox.Append(createBtn)
 
@@ -92,6 +136,7 @@ func ShowCreateTagDialog(parent *adw.ApplicationWindow, repo *git.Repository, co
 	content.SetMarginBottom(24)
 	content.SetMarginStart(24)
 	content.SetMarginEnd(24)
+	content.Append(errorBanner)
 	content.Append(group)
 	content.Append(btnBox)
 

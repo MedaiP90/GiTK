@@ -9,6 +9,7 @@ package app
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/MedaiP90/GiTK/config"
 	"github.com/MedaiP90/GiTK/ui/prefs"
@@ -175,6 +176,8 @@ func (a *GiTKApp) applyTheme() {
 
 // SetTheme changes the application theme and saves the preference.
 func (a *GiTKApp) SetTheme(theme string) {
+	// Strip surrounding quotes that may come from GVariant.String() format.
+	theme = strings.Trim(theme, "'\"")
 	a.cfg.Theme = theme
 	a.applyTheme()
 	if err := a.cfg.Save(); err != nil {
