@@ -1,7 +1,7 @@
 // Package commitlog — graphrenderer.go implements the custom GtkDrawingArea
 // widget that renders the DAG graph column in the commit log table.
 //
-// Each row in the commit log table has a GraphRenderer that draws:
+// Each row in the commit log table has a DrawingArea that draws:
 //   - Vertical lane lines (showing the flow of branches).
 //   - A commit node (circle, diamond for merges, double-ring for HEAD).
 //   - Connecting lines to parent commits (bezier curves for lane changes).
@@ -10,12 +10,16 @@
 // vector graphics. Colors come from the GNOME palette to ensure they
 // look good in both light and dark themes.
 //
-// Performance: This drawing function is called for every visible row on
-// every frame. It must be fast — no allocations, no complex computation.
-// All layout data is pre-computed in git.BuildGraph().
+// Design note: We cannot embed *gtk.DrawingArea in a custom Go struct and
+// recover it from ColumnViewCell.Child(), because gotk4 wraps the C pointer
+// as *gtk.DrawingArea — our Go struct is lost. Instead, we store the commit
+// data in a package-level sync.Map keyed by the DrawingArea's native pointer.
 package commitlog
 
 import (
+	"sync"
+	"unsafe"
+
 	"github.com/MedaiP90/GiTK/git"
 	"github.com/diamondburned/gotk4/pkg/cairo"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
@@ -44,54 +48,68 @@ var laneColors = [][3]float64{
 	{0.659, 0.659, 0.659}, // Grey   (@grey_3)
 }
 
-// GraphRenderer is a GtkDrawingArea that renders one row of the DAG graph.
-// It's embedded as a widget in each row of the GtkColumnView graph column.
-type GraphRenderer struct {
-	*gtk.DrawingArea
-
-	// commit holds the graph layout data for this row.
-	commit git.GraphCommit
-
-	// hasCommit is true if SetCommit has been called.
+// graphData stores the commit data for each DrawingArea, keyed by the
+// native C pointer. This is needed because ColumnViewCell.Child() returns
+// a *gtk.DrawingArea (the C type), not our custom Go wrapper.
+type graphData struct {
+	commit    git.GraphCommit
 	hasCommit bool
 }
 
-// NewGraphRenderer creates a new graph drawing area.
-func NewGraphRenderer() *GraphRenderer {
-	gr := &GraphRenderer{
-		DrawingArea: gtk.NewDrawingArea(),
-	}
+// graphDataMap is the global store for graph commit data.
+// Key: uintptr of the DrawingArea's native GObject pointer.
+var graphDataMap sync.Map
 
-	// Set up the draw function. GTK calls this whenever the widget
-	// needs to be redrawn (e.g., when it becomes visible, or when
-	// we call QueueDraw()).
-	gr.SetDrawFunc(func(area *gtk.DrawingArea, cr *cairo.Context, width, height int) {
-		gr.draw(cr, width, height)
+// drawingAreaKey returns the map key for a DrawingArea.
+func drawingAreaKey(da *gtk.DrawingArea) uintptr {
+	return uintptr(unsafe.Pointer(da.Native()))
+}
+
+// NewGraphRenderer creates a new DrawingArea configured for graph rendering.
+// The returned *gtk.DrawingArea can be safely recovered from
+// ColumnViewCell.Child() without type assertion issues.
+func NewGraphRenderer() *gtk.DrawingArea {
+	da := gtk.NewDrawingArea()
+
+	// Store an empty graphData entry for this widget.
+	key := drawingAreaKey(da)
+	graphDataMap.Store(key, &graphData{})
+
+	// Set up the draw function.
+	da.SetDrawFunc(func(area *gtk.DrawingArea, cr *cairo.Context, width, height int) {
+		drawGraph(area, cr, width, height)
 	})
 
-	return gr
+	return da
 }
 
-// SetCommit sets the graph data for this row and triggers a redraw.
-func (gr *GraphRenderer) SetCommit(commit git.GraphCommit) {
-	gr.commit = commit
-	gr.hasCommit = true
-	gr.QueueDraw()
+// SetGraphCommit sets the commit data for a graph DrawingArea and triggers
+// a redraw. Use this instead of a method on a custom struct.
+func SetGraphCommit(da *gtk.DrawingArea, commit git.GraphCommit) {
+	key := drawingAreaKey(da)
+	graphDataMap.Store(key, &graphData{commit: commit, hasCommit: true})
+	da.QueueDraw()
 }
 
-// draw is the Cairo drawing function called by GTK for each frame.
+// drawGraph is the Cairo drawing function called by GTK for each frame.
 // It renders the lane lines, edges, and commit node for this row.
-func (gr *GraphRenderer) draw(cr *cairo.Context, width, height int) {
-	if !gr.hasCommit {
+func drawGraph(da *gtk.DrawingArea, cr *cairo.Context, width, height int) {
+	key := drawingAreaKey(da)
+	val, ok := graphDataMap.Load(key)
+	if !ok {
+		return
+	}
+	gd := val.(*graphData)
+	if !gd.hasCommit {
 		return
 	}
 
-	c := gr.commit
+	c := gd.commit
 	centerY := float64(height) / 2.0
 
 	// --- Draw edges (lines from this commit to its parents) ---
 	for _, edge := range c.Edges {
-		gr.drawEdge(cr, edge, centerY, height)
+		drawEdge(cr, edge, centerY, height)
 	}
 
 	// --- Draw the commit node ---
@@ -100,10 +118,10 @@ func (gr *GraphRenderer) draw(cr *cairo.Context, width, height int) {
 
 	if c.IsMerge {
 		// Merge commits are drawn as diamonds.
-		gr.drawDiamond(cr, nodeX, centerY, nodeRadius+1, color)
+		drawDiamond(cr, nodeX, centerY, nodeRadius+1, color)
 	} else {
 		// Regular commits are circles.
-		gr.drawCircle(cr, nodeX, centerY, nodeRadius, color)
+		drawCircle(cr, nodeX, centerY, nodeRadius, color)
 	}
 
 	// HEAD commit gets a double-ring.
@@ -116,7 +134,7 @@ func (gr *GraphRenderer) draw(cr *cairo.Context, width, height int) {
 }
 
 // drawEdge draws a connection line from this commit to a parent.
-func (gr *GraphRenderer) drawEdge(cr *cairo.Context, edge git.GraphEdge, centerY float64, height int) {
+func drawEdge(cr *cairo.Context, edge git.GraphEdge, centerY float64, height int) {
 	fromX := float64(edge.FromLane)*laneWidth + laneWidth/2.0
 	toX := float64(edge.ToLane)*laneWidth + laneWidth/2.0
 	color := laneColor(edge.ToLane)
@@ -149,7 +167,7 @@ func (gr *GraphRenderer) drawEdge(cr *cairo.Context, edge git.GraphEdge, centerY
 }
 
 // drawCircle draws a filled circle at the given position.
-func (gr *GraphRenderer) drawCircle(cr *cairo.Context, x, y, radius float64, color [3]float64) {
+func drawCircle(cr *cairo.Context, x, y, radius float64, color [3]float64) {
 	cr.SetSourceRGB(color[0], color[1], color[2])
 	cr.Arc(x, y, radius, 0, 2*3.14159)
 	cr.Fill()
@@ -157,7 +175,7 @@ func (gr *GraphRenderer) drawCircle(cr *cairo.Context, x, y, radius float64, col
 
 // drawDiamond draws a filled diamond (rotated square) at the given position.
 // Used for merge commits to visually distinguish them from regular commits.
-func (gr *GraphRenderer) drawDiamond(cr *cairo.Context, x, y, size float64, color [3]float64) {
+func drawDiamond(cr *cairo.Context, x, y, size float64, color [3]float64) {
 	cr.SetSourceRGB(color[0], color[1], color[2])
 	cr.MoveTo(x, y-size)
 	cr.LineTo(x+size, y)

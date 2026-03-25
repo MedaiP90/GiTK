@@ -257,8 +257,8 @@ func (cl *CommitLog) addGraphColumn() {
 		pos := item.Position()
 		if int(pos) < len(cl.graphCommits) {
 			gc := cl.graphCommits[pos]
-			renderer := item.Child().(*GraphRenderer)
-			renderer.SetCommit(gc)
+			da := item.Child().(*gtk.DrawingArea)
+			SetGraphCommit(da, gc)
 		}
 	})
 
