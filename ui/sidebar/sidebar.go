@@ -95,8 +95,11 @@ func New(cfg *config.Config, onRepoSelected OnRepoSelected, onBranchSelected OnB
 // build constructs all the sidebar widgets.
 func (s *Sidebar) build() {
 	// --- Header bar for the sidebar ---
+	// Hide window control buttons since the main window header already has them.
 	header := adw.NewHeaderBar()
 	header.SetShowTitle(true)
+	header.SetShowStartTitleButtons(false)
+	header.SetShowEndTitleButtons(false)
 
 	// --- Main content ---
 	s.contentBox = gtk.NewBox(gtk.OrientationVertical, 0)
