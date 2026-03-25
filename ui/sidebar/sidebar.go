@@ -62,6 +62,9 @@ type Sidebar struct {
 	// recentExpander wraps the recent repos section so it's collapsible.
 	recentExpander *adw.ExpanderRow
 
+	// recentRows tracks rows added to recentExpander for clearing.
+	recentRows []gtk.Widgetter
+
 	// branchBox holds the branch tree (shown when a repo is open).
 	branchBox *gtk.Box
 
@@ -189,8 +192,11 @@ func (s *Sidebar) SetRepository(repo *git.Repository) {
 
 // RefreshRecent updates the recent repositories list from config.
 func (s *Sidebar) RefreshRecent() {
-	// Clear existing child rows from the expander.
-	clearExpanderChildren(s.recentExpander)
+	// Remove previously added rows.
+	for _, row := range s.recentRows {
+		s.recentExpander.Remove(row)
+	}
+	s.recentRows = nil
 
 	// Populate from config.
 	recents := s.cfg.GetRecentRepositories()
@@ -201,6 +207,7 @@ func (s *Sidebar) RefreshRecent() {
 		row.SetSubtitle("Open or clone a repository to get started")
 		row.AddCSSClass("dim-label")
 		s.recentExpander.AddRow(row)
+		s.recentRows = append(s.recentRows, row)
 		return
 	}
 
@@ -215,6 +222,7 @@ func (s *Sidebar) RefreshRecent() {
 			}
 		})
 		s.recentExpander.AddRow(row)
+		s.recentRows = append(s.recentRows, row)
 	}
 
 	s.recentExpander.SetSubtitle(formatCount(len(recents)))
@@ -329,23 +337,6 @@ func (s *Sidebar) openRepo(path string) {
 	}
 }
 
-// clearExpanderChildren removes all child rows from an AdwExpanderRow
-// by iterating child widgets and removing them via the expander's Remove method.
-func clearExpanderChildren(expander *adw.ExpanderRow) {
-	// Collect children first to avoid modifying during iteration.
-	// FirstChild returns a Widgetter interface; we need to cast to *gtk.Widget.
-	var children []gtk.Widgetter
-	child := expander.FirstChild()
-	for child != nil {
-		children = append(children, child)
-		widget := child.(*gtk.Widget)
-		child = widget.NextSibling()
-	}
-	// Skip the first child (the expander header row itself).
-	for i := 1; i < len(children); i++ {
-		expander.Remove(children[i])
-	}
-}
 
 // NewRepoRow creates a row for the recent repositories list.
 // It shows the repository name and path.
