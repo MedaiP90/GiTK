@@ -123,8 +123,19 @@ func (cl *CommitLog) build() {
 	cl.addDateColumn()
 	cl.addRefsColumn()
 
-	// Handle row activation (click/enter).
+	// Handle row activation (double-click/enter).
 	cl.columnView.ConnectActivate(func(pos uint) {
+		if int(pos) < len(cl.commits) {
+			commit := cl.commits[pos]
+			if cl.onCommitSelected != nil {
+				cl.onCommitSelected(commit)
+			}
+		}
+	})
+
+	// Handle single-click selection changes to show commit detail.
+	cl.selection.ConnectSelectionChanged(func(position, nItems uint) {
+		pos := cl.selection.Selected()
 		if int(pos) < len(cl.commits) {
 			commit := cl.commits[pos]
 			if cl.onCommitSelected != nil {
@@ -264,6 +275,7 @@ func (cl *CommitLog) addGraphColumn() {
 
 	col := gtk.NewColumnViewColumn("Graph", &factory.ListItemFactory)
 	col.SetFixedWidth(120)
+	col.SetResizable(true)
 	cl.columnView.AppendColumn(col)
 }
 
@@ -291,6 +303,7 @@ func (cl *CommitLog) addHashColumn() {
 
 	col := gtk.NewColumnViewColumn("Hash", &factory.ListItemFactory)
 	col.SetFixedWidth(80)
+	col.SetResizable(true)
 	cl.columnView.AppendColumn(col)
 }
 
@@ -318,6 +331,7 @@ func (cl *CommitLog) addSubjectColumn() {
 
 	col := gtk.NewColumnViewColumn("Subject", &factory.ListItemFactory)
 	col.SetExpand(true)
+	col.SetResizable(true)
 	cl.columnView.AppendColumn(col)
 }
 
@@ -344,6 +358,7 @@ func (cl *CommitLog) addAuthorColumn() {
 
 	col := gtk.NewColumnViewColumn("Author", &factory.ListItemFactory)
 	col.SetFixedWidth(150)
+	col.SetResizable(true)
 	cl.columnView.AppendColumn(col)
 }
 
@@ -370,6 +385,7 @@ func (cl *CommitLog) addDateColumn() {
 
 	col := gtk.NewColumnViewColumn("Date", &factory.ListItemFactory)
 	col.SetFixedWidth(120)
+	col.SetResizable(true)
 	cl.columnView.AppendColumn(col)
 }
 
@@ -404,6 +420,7 @@ func (cl *CommitLog) addRefsColumn() {
 
 	col := gtk.NewColumnViewColumn("Refs", &factory.ListItemFactory)
 	col.SetFixedWidth(200)
+	col.SetResizable(true)
 	cl.columnView.AppendColumn(col)
 }
 

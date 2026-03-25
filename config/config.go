@@ -52,8 +52,11 @@ type Config struct {
 	// MaxRecent is the maximum number of recent repositories to remember.
 	MaxRecent int `json:"max_recent"`
 
-	// GitIdentity holds the user's git author information.
-	GitIdentity GitIdentityConfig `json:"git_identity"`
+	// Theme controls the application color scheme: "system", "light", or "dark".
+	Theme string `json:"theme"`
+
+	// Git holds git-related settings (identity, fetch behavior, etc.).
+	Git GitConfig `json:"git"`
 
 	// AI holds settings for the optional Claude AI integration.
 	AI AIConfig `json:"ai"`
@@ -66,17 +69,26 @@ type Config struct {
 	configPath string `json:"-"`
 }
 
-// GitIdentityConfig holds git author/committer identity settings.
-type GitIdentityConfig struct {
-	// Name is the author name for commits (e.g., "Alice Smith").
-	Name string `json:"name"`
+// GitConfig holds all git-related settings.
+type GitConfig struct {
+	// AuthorName is the author name for commits (e.g., "Alice Smith").
+	AuthorName string `json:"author_name"`
 
-	// Email is the author email for commits (e.g., "alice@example.com").
-	Email string `json:"email"`
+	// AuthorEmail is the author email for commits (e.g., "alice@example.com").
+	AuthorEmail string `json:"author_email"`
 
 	// PerRepoOverride, when true, uses the repo's .git/config identity
 	// instead of this global one.
 	PerRepoOverride bool `json:"per_repo_override"`
+
+	// AutoFetch, when true, periodically fetches from all remotes.
+	AutoFetch bool `json:"auto_fetch"`
+
+	// AutoFetchInterval is the interval in minutes between automatic fetches.
+	AutoFetchInterval int `json:"auto_fetch_interval"`
+
+	// PruneOnFetch, when true, prunes deleted remote branches when fetching.
+	PruneOnFetch bool `json:"prune_on_fetch"`
 }
 
 // AIConfig holds settings for the optional AI commit message generation.
@@ -84,15 +96,17 @@ type AIConfig struct {
 	// Enabled controls whether AI features are available in the UI.
 	Enabled bool `json:"enabled"`
 
+	// APIKey is the Anthropic API key for Claude AI.
+	// Note: Storing API keys in config is acceptable for desktop apps
+	// where the config file is user-owned and has restricted permissions.
+	APIKey string `json:"api_key,omitempty"`
+
 	// Model is the Claude model to use (e.g., "claude-sonnet-4-20250514").
 	Model string `json:"model"`
 
 	// SystemPrompt is an optional custom system prompt for commit message
 	// generation. If empty, the default prompt is used.
 	SystemPrompt string `json:"system_prompt,omitempty"`
-
-	// Note: The API key is NOT stored here — it should be stored in the
-	// system keyring (GNOME Keyring / libsecret) for security.
 }
 
 // GraphConfig holds settings for the visual graph view.
@@ -114,8 +128,12 @@ func Default() *Config {
 	return &Config{
 		RecentRepositories: []string{},
 		MaxRecent:          20,
-		GitIdentity: GitIdentityConfig{
-			PerRepoOverride: true,
+		Theme:              "system",
+		Git: GitConfig{
+			PerRepoOverride:   true,
+			AutoFetch:         false,
+			AutoFetchInterval: 5,
+			PruneOnFetch:      false,
 		},
 		AI: AIConfig{
 			Enabled: false,

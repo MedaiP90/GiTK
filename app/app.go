@@ -70,6 +70,9 @@ func New() *GiTKApp {
 		cfg: cfg,
 	}
 
+	// Apply the user's preferred color scheme (light/dark/system).
+	gitkApp.applyTheme()
+
 	// "activate" is emitted when the application is launched (or when the
 	// user tries to launch a second instance — GTK ensures only one
 	// instance runs and re-activates the existing one).
@@ -97,7 +100,7 @@ func (a *GiTKApp) Run(args []string) int {
 func (a *GiTKApp) onActivate() {
 	if a.win == nil {
 		// First activation: build the main window.
-		a.win = NewWindow(a.app, a.cfg)
+		a.win = NewWindow(a, a.app, a.cfg)
 	}
 
 	// Present brings the window to the front. If it was minimized or on
@@ -153,6 +156,30 @@ func (a *GiTKApp) registerActions() {
 	})
 	a.app.AddAction(prefsAction)
 	a.app.SetAccelsForAction("app.preferences", []string{"<Control>comma"})
+}
+
+// applyTheme sets the application color scheme based on the user's preference.
+// libadwaita's AdwStyleManager handles the actual light/dark switching and
+// follows the system accent color automatically.
+func (a *GiTKApp) applyTheme() {
+	sm := adw.StyleManagerGetDefault()
+	switch a.cfg.Theme {
+	case "light":
+		sm.SetColorScheme(adw.ColorSchemeForceLight)
+	case "dark":
+		sm.SetColorScheme(adw.ColorSchemeForceDark)
+	default: // "system" or empty
+		sm.SetColorScheme(adw.ColorSchemeDefault)
+	}
+}
+
+// SetTheme changes the application theme and saves the preference.
+func (a *GiTKApp) SetTheme(theme string) {
+	a.cfg.Theme = theme
+	a.applyTheme()
+	if err := a.cfg.Save(); err != nil {
+		slog.Warn("failed to save theme preference", "error", err)
+	}
 }
 
 // showAbout creates and presents the GNOME-style About dialog using

@@ -38,10 +38,13 @@ type Client struct {
 }
 
 // NewClient creates a new Claude AI client.
-// It reads the API key from the ANTHROPIC_API_KEY environment variable.
-// Returns nil if no API key is set.
-func NewClient(model string) *Client {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+// It uses the provided API key, falling back to the ANTHROPIC_API_KEY
+// environment variable. Returns nil if no API key is available.
+func NewClient(apiKey, model string) *Client {
+	// Fall back to environment variable if no key provided via config.
+	if apiKey == "" {
+		apiKey = os.Getenv("ANTHROPIC_API_KEY")
+	}
 	if apiKey == "" {
 		return nil
 	}

@@ -59,17 +59,15 @@ type Sidebar struct {
 	// recentListBox shows recently opened repositories.
 	recentListBox *gtk.ListBox
 
+	// recentExpander wraps the recent repos section so it's collapsible.
+	recentExpander *adw.ExpanderRow
+
 	// branchBox holds the branch tree (shown when a repo is open).
 	branchBox *gtk.Box
 
-	// localBranchesExpander is the expandable row for local branches.
-	localBranchesExpander *adw.ExpanderRow
-
-	// remoteBranchesExpander is the expandable row for remote branches.
-	remoteBranchesExpander *adw.ExpanderRow
-
-	// tagsExpander is the expandable row for tags.
-	tagsExpander *adw.ExpanderRow
+	// branchListBox holds the expander rows for branches/tags.
+	// We recreate expander rows on each refresh to avoid duplicates.
+	branchListBox *gtk.ListBox
 
 	// contentBox is the main vertical box holding all sidebar sections.
 	contentBox *gtk.Box
@@ -122,43 +120,36 @@ func (s *Sidebar) build() {
 	s.Root.SetContent(scrolled)
 }
 
-// buildRecentSection creates the "Recent Repositories" section.
+// buildRecentSection creates the "Recent Repositories" section as a
+// collapsible AdwExpanderRow so it can be collapsed to give more room
+// to the branches section.
 func (s *Sidebar) buildRecentSection() {
-	// Section header.
-	headerLabel := gtk.NewLabel("Recent Repositories")
-	headerLabel.SetXAlign(0)
-	headerLabel.AddCSSClass("heading")
-	headerLabel.SetMarginTop(12)
-	headerLabel.SetMarginStart(12)
-	headerLabel.SetMarginEnd(12)
-	headerLabel.SetMarginBottom(6)
-	s.contentBox.Append(headerLabel)
+	// Wrapper list box for the expander row (AdwExpanderRow must be
+	// inside a GtkListBox).
+	recentWrapperList := gtk.NewListBox()
+	recentWrapperList.SetSelectionMode(gtk.SelectionNone)
+	recentWrapperList.AddCSSClass("boxed-list")
+	recentWrapperList.SetMarginStart(12)
+	recentWrapperList.SetMarginEnd(12)
+	recentWrapperList.SetMarginTop(12)
+	recentWrapperList.SetMarginBottom(12)
 
-	// List box for recent repos.
-	s.recentListBox = gtk.NewListBox()
-	s.recentListBox.SetSelectionMode(gtk.SelectionSingle)
-	s.recentListBox.AddCSSClass("boxed-list")
-	s.recentListBox.SetMarginStart(12)
-	s.recentListBox.SetMarginEnd(12)
-	s.recentListBox.SetMarginBottom(12)
+	// Collapsible expander for recent repos.
+	s.recentExpander = adw.NewExpanderRow()
+	s.recentExpander.SetTitle("Recent Repositories")
+	s.recentExpander.SetIconName("document-open-recent-symbolic")
+	s.recentExpander.SetExpanded(true)
+	recentWrapperList.Append(s.recentExpander)
 
-	// Connect row activation to open the selected repository.
-	s.recentListBox.ConnectRowActivated(func(row *gtk.ListBoxRow) {
-		idx := row.Index()
-		recents := s.cfg.GetRecentRepositories()
-		if idx >= 0 && idx < len(recents) {
-			s.openRepo(recents[idx])
-		}
-	})
-
-	s.contentBox.Append(s.recentListBox)
+	s.contentBox.Append(recentWrapperList)
 
 	// Populate with current recent repos.
 	s.RefreshRecent()
 }
 
-// buildBranchSection creates the branch tree section with expandable
-// rows for local branches, remote branches, and tags.
+// buildBranchSection creates the branch tree section. The actual expander
+// rows are recreated on each RefreshBranches() call to avoid the duplicate
+// entries problem (AdwExpanderRow has no reliable clear method).
 func (s *Sidebar) buildBranchSection() {
 	s.branchBox = gtk.NewBox(gtk.OrientationVertical, 0)
 	s.branchBox.SetVisible(false) // Hidden until a repo is opened.
@@ -173,36 +164,15 @@ func (s *Sidebar) buildBranchSection() {
 	headerLabel.SetMarginBottom(6)
 	s.branchBox.Append(headerLabel)
 
-	// Branch list box with expander rows.
-	branchListBox := gtk.NewListBox()
-	branchListBox.SetSelectionMode(gtk.SelectionNone)
-	branchListBox.AddCSSClass("boxed-list")
-	branchListBox.SetMarginStart(12)
-	branchListBox.SetMarginEnd(12)
-	branchListBox.SetMarginBottom(12)
+	// Branch list box — will be rebuilt on each refresh.
+	s.branchListBox = gtk.NewListBox()
+	s.branchListBox.SetSelectionMode(gtk.SelectionNone)
+	s.branchListBox.AddCSSClass("boxed-list")
+	s.branchListBox.SetMarginStart(12)
+	s.branchListBox.SetMarginEnd(12)
+	s.branchListBox.SetMarginBottom(12)
 
-	// Local branches expander.
-	s.localBranchesExpander = adw.NewExpanderRow()
-	s.localBranchesExpander.SetTitle("Local")
-	s.localBranchesExpander.SetIconName("vcs-branch-symbolic")
-	s.localBranchesExpander.SetExpanded(true)
-	branchListBox.Append(s.localBranchesExpander)
-
-	// Remote branches expander.
-	s.remoteBranchesExpander = adw.NewExpanderRow()
-	s.remoteBranchesExpander.SetTitle("Remote")
-	s.remoteBranchesExpander.SetIconName("network-server-symbolic")
-	s.remoteBranchesExpander.SetExpanded(false)
-	branchListBox.Append(s.remoteBranchesExpander)
-
-	// Tags expander.
-	s.tagsExpander = adw.NewExpanderRow()
-	s.tagsExpander.SetTitle("Tags")
-	s.tagsExpander.SetIconName("tag-symbolic")
-	s.tagsExpander.SetExpanded(false)
-	branchListBox.Append(s.tagsExpander)
-
-	s.branchBox.Append(branchListBox)
+	s.branchBox.Append(s.branchListBox)
 	s.contentBox.Append(s.branchBox)
 }
 
@@ -219,44 +189,52 @@ func (s *Sidebar) SetRepository(repo *git.Repository) {
 
 // RefreshRecent updates the recent repositories list from config.
 func (s *Sidebar) RefreshRecent() {
-	// Clear existing rows.
-	for {
-		row := s.recentListBox.RowAtIndex(0)
-		if row == nil {
-			break
-		}
-		s.recentListBox.Remove(row)
-	}
+	// Clear existing child rows from the expander.
+	clearExpanderChildren(s.recentExpander)
 
 	// Populate from config.
 	recents := s.cfg.GetRecentRepositories()
 
 	if len(recents) == 0 {
-		// Show a placeholder.
 		row := adw.NewActionRow()
 		row.SetTitle("No recent repositories")
 		row.SetSubtitle("Open or clone a repository to get started")
 		row.AddCSSClass("dim-label")
-		s.recentListBox.Append(row)
+		s.recentExpander.AddRow(row)
 		return
 	}
 
-	for _, path := range recents {
+	for i, path := range recents {
 		row := NewRepoRow(path)
-		s.recentListBox.Append(row)
+		idx := i // capture for closure
+		row.SetActivatable(true)
+		row.ConnectActivated(func() {
+			paths := s.cfg.GetRecentRepositories()
+			if idx < len(paths) {
+				s.openRepo(paths[idx])
+			}
+		})
+		s.recentExpander.AddRow(row)
 	}
+
+	s.recentExpander.SetSubtitle(formatCount(len(recents)))
 }
 
 // RefreshBranches reloads the branch tree from the current repository.
+// It completely rebuilds the branch list box to avoid duplicate entries.
 func (s *Sidebar) RefreshBranches() {
 	if s.repo == nil {
 		return
 	}
 
-	// Clear existing branch rows.
-	clearExpanderRow(s.localBranchesExpander)
-	clearExpanderRow(s.remoteBranchesExpander)
-	clearExpanderRow(s.tagsExpander)
+	// Remove all existing rows from the branch list box by clearing it.
+	for {
+		row := s.branchListBox.RowAtIndex(0)
+		if row == nil {
+			break
+		}
+		s.branchListBox.Remove(row)
+	}
 
 	// Load branches.
 	branches, err := s.repo.Branches()
@@ -267,28 +245,46 @@ func (s *Sidebar) RefreshBranches() {
 
 	currentBranch := s.repo.CurrentBranch()
 
+	// Create fresh expander rows each time.
+	localExpander := adw.NewExpanderRow()
+	localExpander.SetTitle("Local")
+	localExpander.SetIconName("vcs-branch-symbolic")
+	localExpander.SetExpanded(true)
+
+	remoteExpander := adw.NewExpanderRow()
+	remoteExpander.SetTitle("Remote")
+	remoteExpander.SetIconName("network-server-symbolic")
+	remoteExpander.SetExpanded(false)
+
+	localCount := 0
+	remoteCount := 0
+
 	for _, branch := range branches {
 		row := NewBranchRow(branch, branch.Name == currentBranch)
 
-		if branch.IsRemote {
-			s.remoteBranchesExpander.AddRow(row)
-		} else {
-			s.localBranchesExpander.AddRow(row)
-		}
-	}
+		// Wire click to trigger branch checkout.
+		branchName := branch.Name
+		isRemote := branch.IsRemote
+		row.ConnectActivated(func() {
+			if s.onBranchSelected != nil {
+				s.onBranchSelected(branchName, isRemote)
+			}
+		})
 
-	// Update expander subtitles with counts.
-	localCount := 0
-	remoteCount := 0
-	for _, b := range branches {
-		if b.IsRemote {
+		if branch.IsRemote {
+			remoteExpander.AddRow(row)
 			remoteCount++
 		} else {
+			localExpander.AddRow(row)
 			localCount++
 		}
 	}
-	s.localBranchesExpander.SetSubtitle(formatCount(localCount))
-	s.remoteBranchesExpander.SetSubtitle(formatCount(remoteCount))
+
+	localExpander.SetSubtitle(formatCount(localCount))
+	remoteExpander.SetSubtitle(formatCount(remoteCount))
+
+	s.branchListBox.Append(localExpander)
+	s.branchListBox.Append(remoteExpander)
 
 	// Load tags.
 	tags, err := s.repo.Tags()
@@ -297,12 +293,18 @@ func (s *Sidebar) RefreshBranches() {
 		return
 	}
 
+	tagsExpander := adw.NewExpanderRow()
+	tagsExpander.SetTitle("Tags")
+	tagsExpander.SetIconName("tag-symbolic")
+	tagsExpander.SetExpanded(false)
+
 	for _, tag := range tags {
 		row := NewTagRow(tag)
-		s.tagsExpander.AddRow(row)
+		tagsExpander.AddRow(row)
 	}
 
-	s.tagsExpander.SetSubtitle(formatCount(len(tags)))
+	tagsExpander.SetSubtitle(formatCount(len(tags)))
+	s.branchListBox.Append(tagsExpander)
 }
 
 // openRepo opens a repository at the given path and notifies the callback.
@@ -327,19 +329,22 @@ func (s *Sidebar) openRepo(path string) {
 	}
 }
 
-// clearExpanderRow removes all child rows from an AdwExpanderRow.
-func clearExpanderRow(expander *adw.ExpanderRow) {
-	// AdwExpanderRow doesn't expose a "clear" method. We need to
-	// remove children from the underlying GtkListBoxRow.
-	// Since we can't easily iterate children, we use a workaround:
-	// remove the expander's rows by calling Remove on each child widget.
-	// For now, we'll rebuild the expander rows each time.
-	// This is acceptable for the typical number of branches (~10-50).
-
-	// Remove child rows. The first child is always the expander header itself,
-	// so we skip it. Actually, AdwExpanderRow.AddRow adds rows as children,
-	// and we can iterate the underlying list box.
-	// Workaround: keep track of added rows and remove them.
+// clearExpanderChildren removes all child rows from an AdwExpanderRow
+// by iterating child widgets and removing them via the expander's Remove method.
+func clearExpanderChildren(expander *adw.ExpanderRow) {
+	// Collect children first to avoid modifying during iteration.
+	// FirstChild returns a Widgetter interface; we need to cast to *gtk.Widget.
+	var children []gtk.Widgetter
+	child := expander.FirstChild()
+	for child != nil {
+		children = append(children, child)
+		widget := child.(*gtk.Widget)
+		child = widget.NextSibling()
+	}
+	// Skip the first child (the expander header row itself).
+	for i := 1; i < len(children); i++ {
+		expander.Remove(children[i])
+	}
 }
 
 // NewRepoRow creates a row for the recent repositories list.

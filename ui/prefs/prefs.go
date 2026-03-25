@@ -1,9 +1,9 @@
 // Package prefs implements the Preferences window using AdwPreferencesWindow.
 //
 // The preferences window follows GNOME HIG with preference groups for:
-//   - Git Identity (name, email)
+//   - Git (identity, fetch behavior, pruning)
 //   - Graph Settings (max commits, show tags, show remotes)
-//   - AI Settings (enable/disable, model selection)
+//   - AI Settings (enable/disable, API key, model dropdown)
 //
 // Changes are saved to the config file when the window is closed.
 package prefs
@@ -18,6 +18,13 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
 
+// Available Claude models for the AI dropdown.
+var claudeModels = []string{
+	"claude-sonnet-4-20250514",
+	"claude-opus-4-20250514",
+	"claude-haiku-4-5-20251001",
+}
+
 // Show creates and presents the preferences window.
 //
 // Parameters:
@@ -25,42 +32,63 @@ import (
 //   - cfg: the configuration to read/write.
 func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 	// AdwPreferencesWindow is the GNOME HIG way to show preferences.
-	// It provides built-in search and navigation between preference pages.
 	win := adw.NewPreferencesWindow()
 	win.SetTitle("Preferences")
 	win.SetTransientFor(&parent.Window)
 	win.SetModal(true)
 
-	// --- Git Identity Page ---
-	identityPage := adw.NewPreferencesPage()
-	identityPage.SetTitle("Identity")
-	identityPage.SetIconName("avatar-default-symbolic")
+	// --- Git Page ---
+	gitPage := adw.NewPreferencesPage()
+	gitPage.SetTitle("Git")
+	gitPage.SetIconName("vcs-branch-symbolic")
 
+	// Identity subsection.
 	identityGroup := adw.NewPreferencesGroup()
-	identityGroup.SetTitle("Git Identity")
+	identityGroup.SetTitle("Identity")
 	identityGroup.SetDescription("Used as author when creating commits")
 
-	// Author name.
 	nameRow := adw.NewEntryRow()
 	nameRow.SetTitle("Author Name")
-	nameRow.SetText(cfg.GitIdentity.Name)
+	nameRow.SetText(cfg.Git.AuthorName)
 	identityGroup.Add(nameRow)
 
-	// Author email.
 	emailRow := adw.NewEntryRow()
 	emailRow.SetTitle("Author Email")
-	emailRow.SetText(cfg.GitIdentity.Email)
+	emailRow.SetText(cfg.Git.AuthorEmail)
 	identityGroup.Add(emailRow)
 
-	// Per-repo override switch.
 	perRepoRow := adw.NewSwitchRow()
 	perRepoRow.SetTitle("Use Per-Repository Identity")
 	perRepoRow.SetSubtitle("When enabled, uses the identity from .git/config instead")
-	perRepoRow.SetActive(cfg.GitIdentity.PerRepoOverride)
+	perRepoRow.SetActive(cfg.Git.PerRepoOverride)
 	identityGroup.Add(perRepoRow)
 
-	identityPage.Add(identityGroup)
-	win.Add(identityPage)
+	gitPage.Add(identityGroup)
+
+	// Fetch subsection.
+	fetchGroup := adw.NewPreferencesGroup()
+	fetchGroup.SetTitle("Fetch")
+	fetchGroup.SetDescription("Configure automatic remote fetching")
+
+	autoFetchRow := adw.NewSwitchRow()
+	autoFetchRow.SetTitle("Auto-Refresh")
+	autoFetchRow.SetSubtitle("Periodically fetch from all remotes")
+	autoFetchRow.SetActive(cfg.Git.AutoFetch)
+	fetchGroup.Add(autoFetchRow)
+
+	autoFetchIntervalRow := adw.NewEntryRow()
+	autoFetchIntervalRow.SetTitle("Fetch Interval (minutes)")
+	autoFetchIntervalRow.SetText(fmt.Sprintf("%d", cfg.Git.AutoFetchInterval))
+	fetchGroup.Add(autoFetchIntervalRow)
+
+	pruneRow := adw.NewSwitchRow()
+	pruneRow.SetTitle("Prune When Fetching")
+	pruneRow.SetSubtitle("Remove remote-tracking branches that no longer exist on the remote")
+	pruneRow.SetActive(cfg.Git.PruneOnFetch)
+	fetchGroup.Add(pruneRow)
+
+	gitPage.Add(fetchGroup)
+	win.Add(gitPage)
 
 	// --- Graph Settings Page ---
 	graphPage := adw.NewPreferencesPage()
@@ -70,19 +98,16 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 	graphGroup := adw.NewPreferencesGroup()
 	graphGroup.SetTitle("Graph View Settings")
 
-	// Max commits.
 	maxCommitsRow := adw.NewEntryRow()
 	maxCommitsRow.SetTitle("Maximum Commits")
 	maxCommitsRow.SetText(fmt.Sprintf("%d", cfg.Graph.MaxCommits))
 	graphGroup.Add(maxCommitsRow)
 
-	// Show tags toggle.
 	showTagsRow := adw.NewSwitchRow()
 	showTagsRow.SetTitle("Show Tags")
 	showTagsRow.SetActive(cfg.Graph.ShowTags)
 	graphGroup.Add(showTagsRow)
 
-	// Show remotes toggle.
 	showRemotesRow := adw.NewSwitchRow()
 	showRemotesRow.SetTitle("Show Remote Branches")
 	showRemotesRow.SetActive(cfg.Graph.ShowRemotes)
@@ -100,16 +125,36 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 	aiGroup.SetTitle("Claude AI Integration")
 	aiGroup.SetDescription("Generate commit messages using Claude AI")
 
-	// AI enabled toggle.
 	aiEnabledRow := adw.NewSwitchRow()
 	aiEnabledRow.SetTitle("Enable AI Features")
 	aiEnabledRow.SetActive(cfg.AI.Enabled)
 	aiGroup.Add(aiEnabledRow)
 
-	// Model selection.
-	modelRow := adw.NewEntryRow()
+	// API key entry (password-style).
+	apiKeyRow := adw.NewPasswordEntryRow()
+	apiKeyRow.SetTitle("API Key")
+	if cfg.AI.APIKey != "" {
+		apiKeyRow.SetText(cfg.AI.APIKey)
+	}
+	aiGroup.Add(apiKeyRow)
+
+	// Model selection as a combo row (dropdown).
+	modelRow := adw.NewComboRow()
 	modelRow.SetTitle("Model")
-	modelRow.SetText(cfg.AI.Model)
+	modelRow.SetSubtitle("Select the Claude model for commit message generation")
+
+	// Build a string list for the combo row.
+	modelList := gtk.NewStringList(claudeModels)
+	modelRow.SetModel(modelList)
+
+	// Set the active model based on config.
+	for i, m := range claudeModels {
+		if m == cfg.AI.Model {
+			modelRow.SetSelected(uint(i))
+			break
+		}
+	}
+
 	aiGroup.Add(modelRow)
 
 	aiPage.Add(aiGroup)
@@ -118,9 +163,14 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 	// Save settings when the window is closed.
 	win.ConnectCloseRequest(func() bool {
 		// Read values from UI and update config.
-		cfg.GitIdentity.Name = nameRow.Text()
-		cfg.GitIdentity.Email = emailRow.Text()
-		cfg.GitIdentity.PerRepoOverride = perRepoRow.Active()
+		cfg.Git.AuthorName = nameRow.Text()
+		cfg.Git.AuthorEmail = emailRow.Text()
+		cfg.Git.PerRepoOverride = perRepoRow.Active()
+		cfg.Git.AutoFetch = autoFetchRow.Active()
+		if interval, err := strconv.Atoi(autoFetchIntervalRow.Text()); err == nil && interval > 0 {
+			cfg.Git.AutoFetchInterval = interval
+		}
+		cfg.Git.PruneOnFetch = pruneRow.Active()
 
 		if maxCommits, err := strconv.Atoi(maxCommitsRow.Text()); err == nil && maxCommits > 0 {
 			cfg.Graph.MaxCommits = maxCommits
@@ -129,7 +179,13 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 		cfg.Graph.ShowRemotes = showRemotesRow.Active()
 
 		cfg.AI.Enabled = aiEnabledRow.Active()
-		cfg.AI.Model = modelRow.Text()
+		cfg.AI.APIKey = apiKeyRow.Text()
+
+		// Read selected model from combo row.
+		selectedIdx := modelRow.Selected()
+		if int(selectedIdx) < len(claudeModels) {
+			cfg.AI.Model = claudeModels[selectedIdx]
+		}
 
 		if err := cfg.Save(); err != nil {
 			slog.Warn("failed to save preferences", "error", err)
@@ -139,7 +195,4 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 	})
 
 	win.Present()
-
-	// Suppress unused import warning for gtk.
-	_ = gtk.NewBox
 }

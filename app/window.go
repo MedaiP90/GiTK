@@ -31,7 +31,6 @@ import (
 	"github.com/MedaiP90/GiTK/ui/commitdetail"
 	"github.com/MedaiP90/GiTK/ui/commitlog"
 	"github.com/MedaiP90/GiTK/ui/dialogs"
-	"github.com/MedaiP90/GiTK/ui/graphview"
 	"github.com/MedaiP90/GiTK/ui/merge"
 	"github.com/MedaiP90/GiTK/ui/sidebar"
 	"github.com/MedaiP90/GiTK/ui/staging"
@@ -44,6 +43,9 @@ import (
 // Window is the main application window. It holds references to all major
 // layout widgets so that other parts of the UI can update them.
 type Window struct {
+	// gitkApp is a back-reference to the parent app for theme switching etc.
+	gitkApp *GiTKApp
+
 	// window is the AdwApplicationWindow — the root GTK window.
 	window *adw.ApplicationWindow
 
@@ -80,11 +82,13 @@ type Window struct {
 	// stagingView is the staging area view.
 	stagingView *staging.StagingView
 
-	// graphView is the visual DAG graph view.
-	graphView *graphview.GraphView
-
 	// mergeView is the three-pane merge editor.
 	mergeView *merge.MergeView
+
+	// logBtn and stagingBtn are header bar toggle buttons, kept as fields
+	// so we can update their active state and add badges.
+	logBtn     *gtk.ToggleButton
+	stagingBtn *gtk.ToggleButton
 
 	// repo is the currently open git repository (nil if none).
 	repo *git.Repository
@@ -100,9 +104,10 @@ type Window struct {
 // Parameters:
 //   - app: the adw.Application that owns this window.
 //   - cfg: the user configuration (recent repos, preferences, etc.).
-func NewWindow(app *adw.Application, cfg *config.Config) *Window {
+func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Window {
 	w := &Window{
-		cfg: cfg,
+		gitkApp: gitkApp,
+		cfg:     cfg,
 	}
 
 	// --- Create the AdwApplicationWindow ---
@@ -158,11 +163,10 @@ func (w *Window) ShowToast(message string) {
 //
 // Layout:
 //
-//	[Open] [Clone]    GiTK    [View Switcher]    [≡]
+//	[Open] [Clone]    [Log] [Staging]    GiTK    [Fetch] [Pull] [Push]  [≡]
 //
-// The left side has buttons for opening/cloning repos.
-// The center shows the app title (or a view switcher when a repo is open).
-// The right side has the primary menu.
+// The left side has buttons for opening/cloning repos and view switchers.
+// The right side has remote operations and the primary menu.
 func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	header := adw.NewHeaderBar()
 
@@ -174,7 +178,8 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	})
 	header.PackStart(openBtn)
 
-	cloneBtn := gtk.NewButtonFromIconName("folder-download-symbolic")
+	// Clone button uses a cloud icon per user request.
+	cloneBtn := gtk.NewButtonFromIconName("weather-few-clouds-symbolic")
 	cloneBtn.SetTooltipText("Clone Repository")
 	cloneBtn.ConnectClicked(func() {
 		w.onCloneRepository()
@@ -182,43 +187,32 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	header.PackStart(cloneBtn)
 
 	// --- View switcher buttons ---
-	// These toggle between the main views: Log, Staging, Graph.
-	logBtn := gtk.NewToggleButton()
-	logBtn.SetIconName("view-list-symbolic")
-	logBtn.SetTooltipText("Commit Log")
-	logBtn.SetActive(true)
-	logBtn.ConnectClicked(func() {
+	// These toggle between the main views: Log and Staging.
+	// They are mutually exclusive — clicking one deactivates the other.
+	w.logBtn = gtk.NewToggleButton()
+	w.logBtn.SetIconName("view-list-symbolic")
+	w.logBtn.SetTooltipText("Commit Log")
+	w.logBtn.SetActive(true)
+	w.logBtn.ConnectClicked(func() {
 		if w.repo != nil {
-			w.contentStack.SetVisibleChildName("log")
+			w.switchToView("log")
 		}
 	})
-	header.PackStart(logBtn)
+	header.PackStart(w.logBtn)
 
-	stagingBtn := gtk.NewToggleButton()
-	stagingBtn.SetIconName("document-edit-symbolic")
-	stagingBtn.SetTooltipText("Staging Area")
-	stagingBtn.ConnectClicked(func() {
+	// Staging button wrapped in an overlay to support a badge indicator.
+	w.stagingBtn = gtk.NewToggleButton()
+	w.stagingBtn.SetIconName("document-edit-symbolic")
+	w.stagingBtn.SetTooltipText("Staging Area")
+	w.stagingBtn.ConnectClicked(func() {
 		if w.repo != nil {
 			w.stagingView.SetRepository(w.repo)
-			w.contentStack.SetVisibleChildName("staging")
+			w.switchToView("staging")
 		}
 	})
-	header.PackStart(stagingBtn)
-
-	graphBtn := gtk.NewToggleButton()
-	graphBtn.SetIconName("view-app-grid-symbolic")
-	graphBtn.SetTooltipText("Graph View")
-	graphBtn.ConnectClicked(func() {
-		if w.repo != nil {
-			w.graphView.LoadFromRepo(w.repo)
-			w.contentStack.SetVisibleChildName("graph")
-		}
-	})
-	header.PackStart(graphBtn)
+	header.PackStart(w.stagingBtn)
 
 	// --- Right side: Primary menu ---
-	// The primary menu is the hamburger menu (≡) in the top-right corner.
-	// It contains actions like Preferences, Keyboard Shortcuts, About.
 	menuBtn := w.buildPrimaryMenu()
 	header.PackEnd(menuBtn)
 
@@ -234,7 +228,7 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	})
 	header.PackEnd(pushBtn)
 
-	pullBtn := gtk.NewButtonFromIconName("folder-download-symbolic")
+	pullBtn := gtk.NewButtonFromIconName("go-down-symbolic")
 	pullBtn.SetTooltipText("Pull")
 	pullBtn.ConnectClicked(func() {
 		if w.repo != nil {
@@ -248,7 +242,39 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	})
 	header.PackEnd(pullBtn)
 
+	// Fetch button in the toolbar for quick access.
+	fetchBtn := gtk.NewButtonFromIconName("emblem-synchronizing-symbolic")
+	fetchBtn.SetTooltipText("Fetch")
+	fetchBtn.ConnectClicked(func() {
+		if w.repo == nil {
+			return
+		}
+		go func() {
+			err := w.repo.Fetch()
+			glib.IdleAdd(func() {
+				if err != nil {
+					w.ShowToast("Fetch failed: " + err.Error())
+					return
+				}
+				w.ShowToast("Fetched from origin")
+				w.sidebar.RefreshBranches()
+				w.commitLog.SetRepository(w.repo)
+			})
+		}()
+	})
+	header.PackEnd(fetchBtn)
+
 	return header
+}
+
+// switchToView switches the content stack to the named view and updates
+// the toggle button states so only the active view's button is toggled.
+func (w *Window) switchToView(name string) {
+	w.contentStack.SetVisibleChildName(name)
+
+	// Update toggle button active states to match the visible view.
+	w.logBtn.SetActive(name == "log")
+	w.stagingBtn.SetActive(name == "staging")
 }
 
 // buildPrimaryMenu creates the hamburger menu button (≡) with the app menu.
@@ -264,12 +290,19 @@ func (w *Window) buildPrimaryMenu() *gtk.MenuButton {
 	repoSection.Append("Fetch All", "win.fetch")
 	menu.AppendSection("", repoSection)
 
-	// Section 2: View actions
+	// Section 2: Theme selection (light, dark, system).
+	themeSection := newMenu()
+	themeSection.Append("System Theme", "win.theme::system")
+	themeSection.Append("Light Theme", "win.theme::light")
+	themeSection.Append("Dark Theme", "win.theme::dark")
+	menu.AppendSection("Appearance", themeSection)
+
+	// Section 3: View actions
 	viewSection := newMenu()
 	viewSection.Append("Keyboard Shortcuts", "app.shortcuts")
 	menu.AppendSection("", viewSection)
 
-	// Section 3: Application actions
+	// Section 4: Application actions
 	appSection := newMenu()
 	appSection.Append("Preferences", "app.preferences")
 	appSection.Append("About GiTK", "app.about")
@@ -355,12 +388,6 @@ func (w *Window) buildContentArea() {
 	})
 	w.contentStack.AddNamed(w.stagingView.Root, "staging")
 
-	// --- Graph view ---
-	w.graphView = graphview.New(func(gc git.GraphCommit) {
-		slog.Info("graph commit selected", "hash", gc.ShortHash)
-	})
-	w.contentStack.AddNamed(w.graphView.Root, "graph")
-
 	// --- Merge view ---
 	w.mergeView = merge.New(
 		func(path string, content string) {
@@ -404,9 +431,30 @@ func (w *Window) onRepoSelected(repo *git.Repository) {
 	w.commitLog.SetRepository(repo)
 	w.commitDetail.SetRepository(repo)
 	w.window.SetTitle("GiTK — " + repo.Name())
-	w.contentStack.SetVisibleChildName("log")
+	w.switchToView("log")
 	w.ShowToast("Opened " + repo.Name())
+	w.updateStagingBadge()
 	slog.Info("repository selected", "path", repo.Path())
+}
+
+// updateStagingBadge checks for uncommitted changes and updates
+// the staging button's CSS to show a visual indicator.
+func (w *Window) updateStagingBadge() {
+	if w.repo == nil {
+		w.stagingBtn.RemoveCSSClass("needs-attention")
+		return
+	}
+
+	go func() {
+		changes, err := w.repo.Status()
+		glib.IdleAdd(func() {
+			if err != nil || len(changes) == 0 {
+				w.stagingBtn.RemoveCSSClass("needs-attention")
+			} else {
+				w.stagingBtn.AddCSSClass("needs-attention")
+			}
+		})
+	}()
 }
 
 // onBranchSelected is called by the sidebar when a branch is clicked.
@@ -465,6 +513,16 @@ func (w *Window) registerWindowActions() {
 		})
 	})
 	w.window.AddAction(stashAction)
+
+	// Theme action — takes a string parameter ("system", "light", "dark").
+	themeAction := gio.NewSimpleAction("theme", glib.NewVariantType("s"))
+	themeAction.ConnectActivate(func(param *glib.Variant) {
+		if param != nil {
+			theme := param.String()
+			w.gitkApp.SetTheme(theme)
+		}
+	})
+	w.window.AddAction(themeAction)
 
 	// Fetch All action.
 	fetchAction := gio.NewSimpleAction("fetch", nil)

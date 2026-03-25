@@ -8,22 +8,22 @@
 // The view also includes:
 //   - A hunk-level diff viewer for the selected file.
 //   - Stage/unstage buttons for individual files.
-//   - A commit message area with the commit button.
+//   - A commit message area with subject + optional description.
+//   - A commit button that is only enabled when files are staged and a
+//     message has been written.
+//   - Live updates when the repository state changes.
 //
 // Widget hierarchy:
 //
 //	AdwToolbarView
-//	  ├─ [top] AdwHeaderBar
 //	  └─ [content] GtkPaned (horizontal)
-//	       ├─ [start] GtkBox (file lists)
-//	       │    ├─ "Staged Changes" GtkListBox
-//	       │    ├─ "Unstaged Changes" GtkListBox
-//	       │    └─ Commit message + button
+//	       ├─ [start] GtkBox (file lists + commit area)
 //	       └─ [end] HunkView (diff + hunk staging)
 package staging
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/MedaiP90/GiTK/git"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
@@ -54,8 +54,11 @@ type StagingView struct {
 	// hunkView shows the selected file's diff with hunk-level staging.
 	hunkView *HunkView
 
-	// commitMessage is the text view for the commit message.
-	commitMessage *gtk.TextView
+	// commitSubject is the text entry for the commit subject line.
+	commitSubject *gtk.Entry
+
+	// commitDescription is the text view for the optional commit body.
+	commitDescription *gtk.TextView
 
 	// commitBtn is the commit button.
 	commitBtn *gtk.Button
@@ -65,6 +68,12 @@ type StagingView struct {
 
 	// toastOverlay for inline notifications.
 	toastOverlay *adw.ToastOverlay
+
+	// hasStagedFiles tracks whether any files are currently staged.
+	hasStagedFiles bool
+
+	// watcher monitors the repository for live changes.
+	watcher *git.Watcher
 }
 
 // New creates a new StagingView.
@@ -121,6 +130,15 @@ func (sv *StagingView) build() {
 	sv.stagedListBox.SetMarginStart(12)
 	sv.stagedListBox.SetMarginEnd(12)
 	sv.stagedListBox.SetMarginBottom(6)
+
+	// Wire selection to show diff in hunk view.
+	sv.stagedListBox.ConnectRowSelected(func(row *gtk.ListBoxRow) {
+		if row != nil {
+			// Deselect in the other list box.
+			sv.unstagedListBox.UnselectAll()
+			sv.showDiffForSelectedRow(row, true)
+		}
+	})
 	filePanel.Append(sv.stagedListBox)
 
 	// --- Unstaged changes section ---
@@ -137,6 +155,15 @@ func (sv *StagingView) build() {
 	sv.unstagedListBox.SetMarginStart(12)
 	sv.unstagedListBox.SetMarginEnd(12)
 	sv.unstagedListBox.SetMarginBottom(12)
+
+	// Wire selection to show diff in hunk view.
+	sv.unstagedListBox.ConnectRowSelected(func(row *gtk.ListBoxRow) {
+		if row != nil {
+			// Deselect in the other list box.
+			sv.stagedListBox.UnselectAll()
+			sv.showDiffForSelectedRow(row, false)
+		}
+	})
 	filePanel.Append(sv.unstagedListBox)
 
 	// --- Commit message area ---
@@ -167,7 +194,8 @@ func (sv *StagingView) build() {
 	sv.Root.SetContent(sv.toastOverlay)
 }
 
-// buildCommitArea creates the commit message and button area.
+// buildCommitArea creates the commit message (subject + description) and
+// the commit button area.
 func (sv *StagingView) buildCommitArea(parent *gtk.Box) {
 	commitBox := gtk.NewBox(gtk.OrientationVertical, 6)
 	commitBox.SetMarginTop(12)
@@ -175,44 +203,59 @@ func (sv *StagingView) buildCommitArea(parent *gtk.Box) {
 	commitBox.SetMarginEnd(12)
 	commitBox.SetMarginBottom(12)
 
-	// Commit message label.
+	// Commit subject label + counter.
+	subjectHeader := gtk.NewBox(gtk.OrientationHorizontal, 0)
 	msgLabel := gtk.NewLabel("Commit Message")
 	msgLabel.SetXAlign(0)
 	msgLabel.AddCSSClass("heading")
-	commitBox.Append(msgLabel)
+	msgLabel.SetHExpand(true)
+	subjectHeader.Append(msgLabel)
 
-	// Character counter for subject line.
 	sv.charCounter = gtk.NewLabel("0 / 72")
 	sv.charCounter.SetXAlign(1)
 	sv.charCounter.AddCSSClass("dim-label")
 	sv.charCounter.AddCSSClass("caption")
-	commitBox.Append(sv.charCounter)
+	subjectHeader.Append(sv.charCounter)
+	commitBox.Append(subjectHeader)
 
-	// Text view for commit message.
-	sv.commitMessage = gtk.NewTextView()
-	sv.commitMessage.SetWrapMode(gtk.WrapWord)
-	sv.commitMessage.SetTopMargin(6)
-	sv.commitMessage.SetBottomMargin(6)
-	sv.commitMessage.SetLeftMargin(6)
-	sv.commitMessage.SetRightMargin(6)
-	sv.commitMessage.SetVExpand(false)
-	sv.commitMessage.SetAcceptsTab(false)
-
-	// Frame around the text view.
-	msgFrame := gtk.NewFrame("")
-	msgFrame.SetChild(sv.commitMessage)
-	commitBox.Append(msgFrame)
-
-	// Update character counter as the user types.
-	buffer := sv.commitMessage.Buffer()
-	buffer.ConnectChanged(func() {
+	// Subject line entry (single line).
+	sv.commitSubject = gtk.NewEntry()
+	sv.commitSubject.SetPlaceholderText("Summary (required)")
+	sv.commitSubject.ConnectChanged(func() {
 		sv.updateCharCounter()
+		sv.updateCommitButton()
 	})
+	commitBox.Append(sv.commitSubject)
 
-	// Commit button.
+	// Optional description (multi-line).
+	descLabel := gtk.NewLabel("Description (optional)")
+	descLabel.SetXAlign(0)
+	descLabel.AddCSSClass("dim-label")
+	descLabel.AddCSSClass("caption")
+	descLabel.SetMarginTop(6)
+	commitBox.Append(descLabel)
+
+	sv.commitDescription = gtk.NewTextView()
+	sv.commitDescription.SetWrapMode(gtk.WrapWord)
+	sv.commitDescription.SetTopMargin(6)
+	sv.commitDescription.SetBottomMargin(6)
+	sv.commitDescription.SetLeftMargin(6)
+	sv.commitDescription.SetRightMargin(6)
+	sv.commitDescription.SetVExpand(false)
+	sv.commitDescription.SetAcceptsTab(false)
+
+	// Give the description a reasonable default height.
+	sv.commitDescription.SetSizeRequest(-1, 80)
+
+	descFrame := gtk.NewFrame("")
+	descFrame.SetChild(sv.commitDescription)
+	commitBox.Append(descFrame)
+
+	// Commit button — disabled until files are staged and message is written.
 	sv.commitBtn = gtk.NewButtonWithLabel("Commit")
 	sv.commitBtn.AddCSSClass("suggested-action")
 	sv.commitBtn.SetMarginTop(6)
+	sv.commitBtn.SetSensitive(false)
 	sv.commitBtn.ConnectClicked(func() {
 		sv.doCommit()
 	})
@@ -222,9 +265,40 @@ func (sv *StagingView) buildCommitArea(parent *gtk.Box) {
 }
 
 // SetRepository sets the current repository and refreshes the staging area.
+// It also starts a file watcher for live updates.
 func (sv *StagingView) SetRepository(repo *git.Repository) {
+	// Stop any existing watcher.
+	if sv.watcher != nil {
+		sv.watcher.Stop()
+		sv.watcher = nil
+	}
+
 	sv.repo = repo
 	sv.Refresh()
+
+	// Start a watcher for live updates.
+	if repo != nil {
+		sv.watcher = git.NewWatcher(repo, 2*time.Second)
+		sv.watcher.Start()
+		go sv.watchLoop()
+	}
+}
+
+// watchLoop listens for watcher events and refreshes the staging view
+// when the working tree or index changes.
+func (sv *StagingView) watchLoop() {
+	watcher := sv.watcher
+	if watcher == nil {
+		return
+	}
+	for event := range watcher.Events {
+		switch event {
+		case git.WatchEventWorkTree, git.WatchEventIndex, git.WatchEventHead:
+			glib.IdleAdd(func() {
+				sv.Refresh()
+			})
+		}
+	}
 }
 
 // Refresh reloads the staging area from the current repository.
@@ -244,11 +318,14 @@ func (sv *StagingView) Refresh() {
 		return
 	}
 
+	sv.hasStagedFiles = false
+
 	for _, change := range changes {
 		// Staged changes.
 		if change.Staging != git.StatusUnmodified && change.Staging != git.FileStatusCode('?') {
 			row := sv.createFileRow(change, true)
 			sv.stagedListBox.Append(row)
+			sv.hasStagedFiles = true
 		}
 
 		// Unstaged changes.
@@ -257,6 +334,46 @@ func (sv *StagingView) Refresh() {
 			sv.unstagedListBox.Append(row)
 		}
 	}
+
+	sv.updateCommitButton()
+}
+
+// showDiffForSelectedRow computes and shows the diff for the selected file.
+func (sv *StagingView) showDiffForSelectedRow(row *gtk.ListBoxRow, isStaged bool) {
+	if sv.repo == nil || row == nil {
+		return
+	}
+
+	// Get the file path from the row's name (set when creating the row).
+	path := row.Name()
+	if path == "" {
+		return
+	}
+
+	// Compute the diff for this file.
+	var diffs []git.DiffResult
+	var err error
+	if isStaged {
+		diffs, err = sv.repo.DiffStaged()
+	} else {
+		diffs, err = sv.repo.DiffWorking()
+	}
+
+	if err != nil {
+		slog.Warn("failed to compute diff for staging", "path", path, "error", err)
+		return
+	}
+
+	// Find the diff for this specific file.
+	for _, diff := range diffs {
+		if diff.NewPath == path || diff.OldPath == path {
+			sv.hunkView.SetFile(path, diff, isStaged)
+			return
+		}
+	}
+
+	// No diff found — file might be binary or empty.
+	sv.hunkView.SetFile(path, git.DiffResult{NewPath: path}, isStaged)
 }
 
 // createFileRow creates an AdwActionRow for a file change with a
@@ -265,6 +382,9 @@ func (sv *StagingView) createFileRow(change git.FileChange, isStaged bool) *adw.
 	row := adw.NewActionRow()
 	row.SetTitle(change.Path)
 	row.SetActivatable(true)
+
+	// Store the path on the row's name so we can retrieve it on selection.
+	row.SetName(change.Path)
 
 	// Change type icon.
 	var iconName string
@@ -307,6 +427,14 @@ func (sv *StagingView) createFileRow(change git.FileChange, isStaged bool) *adw.
 	row.AddSuffix(actionBtn)
 
 	return row
+}
+
+// updateCommitButton enables/disables the commit button based on whether
+// there are staged files and a non-empty commit message.
+func (sv *StagingView) updateCommitButton() {
+	subject := sv.commitSubject.Text()
+	enabled := sv.hasStagedFiles && len(subject) > 0
+	sv.commitBtn.SetSensitive(enabled)
 }
 
 // stageFile stages a single file.
@@ -383,15 +511,21 @@ func (sv *StagingView) doCommit() {
 		return
 	}
 
-	// Get the commit message.
-	buffer := sv.commitMessage.Buffer()
-	start := buffer.StartIter()
-	end := buffer.EndIter()
-	message := buffer.Text(start, end, false)
-
-	if message == "" {
+	// Build the commit message from subject + optional description.
+	subject := sv.commitSubject.Text()
+	if subject == "" {
 		sv.showToast("Please enter a commit message")
 		return
+	}
+
+	message := subject
+	// Append description if provided.
+	descBuffer := sv.commitDescription.Buffer()
+	descStart := descBuffer.StartIter()
+	descEnd := descBuffer.EndIter()
+	description := descBuffer.Text(descStart, descEnd, false)
+	if description != "" {
+		message = subject + "\n\n" + description
 	}
 
 	// Perform the commit in a goroutine.
@@ -407,8 +541,9 @@ func (sv *StagingView) doCommit() {
 				return
 			}
 
-			// Clear the message and refresh.
-			buffer.SetText("")
+			// Clear the message fields and refresh.
+			sv.commitSubject.SetText("")
+			descBuffer.SetText("")
 			sv.Refresh()
 			sv.showToast("Committed " + hash[:7])
 
@@ -419,25 +554,10 @@ func (sv *StagingView) doCommit() {
 	}()
 }
 
-// updateCharCounter updates the character counter label.
-// The counter tracks the subject line (first line) length.
+// updateCharCounter updates the character counter label for the subject line.
 func (sv *StagingView) updateCharCounter() {
-	buffer := sv.commitMessage.Buffer()
-	start := buffer.StartIter()
-	end := buffer.EndIter()
-	text := buffer.Text(start, end, false)
-
-	// Get the first line (subject).
-	subject := text
-	for i, ch := range text {
-		if ch == '\n' {
-			subject = text[:i]
-			break
-		}
-	}
-
-	count := len(subject)
-	sv.charCounter.SetText(string(rune('0'+count/10)) + string(rune('0'+count%10)) + " / 72")
+	text := sv.commitSubject.Text()
+	count := len(text)
 
 	// Remove all existing style classes.
 	sv.charCounter.RemoveCSSClass("warning")
@@ -450,14 +570,17 @@ func (sv *StagingView) updateCharCounter() {
 		sv.charCounter.AddCSSClass("warning")
 	}
 
-	// Simple counter display.
-	counterText := ""
-	if count < 100 {
-		counterText = string(rune('0'+count/10)) + string(rune('0'+count%10))
-	} else {
-		counterText = "99+"
+	sv.charCounter.SetText(formatCharCount(count))
+}
+
+// formatCharCount formats the character count as "N / 72".
+func formatCharCount(count int) string {
+	if count >= 100 {
+		return "99+ / 72"
 	}
-	sv.charCounter.SetText(counterText + " / 72")
+	tens := count / 10
+	ones := count % 10
+	return string(rune('0'+tens)) + string(rune('0'+ones)) + " / 72"
 }
 
 // showToast shows a toast notification in the staging view.
