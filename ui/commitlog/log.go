@@ -233,11 +233,12 @@ func (cl *CommitLog) applyFilter(query string) {
 	cl.setCommits(filtered)
 }
 
-// toListItem casts a *coreglib.Object to a *gtk.ListItem.
-// This is needed because gotk4's SignalListItemFactory callbacks receive
-// a generic GObject, but the actual object is always a GtkListItem.
-func toListItem(obj *coreglib.Object) *gtk.ListItem {
-	return obj.Cast().(*gtk.ListItem)
+// toCell casts a *coreglib.Object to a *gtk.ColumnViewCell.
+// In gotk4 v0.3.2+, GtkColumnView's SignalListItemFactory callbacks
+// receive a GtkColumnViewCell (not GtkListItem). ColumnViewCell embeds
+// ListItem and provides the same SetChild/Child/Position API.
+func toCell(obj *coreglib.Object) *gtk.ColumnViewCell {
+	return obj.Cast().(*gtk.ColumnViewCell)
 }
 
 // addGraphColumn adds the DAG graph column.
@@ -245,14 +246,14 @@ func (cl *CommitLog) addGraphColumn() {
 	factory := gtk.NewSignalListItemFactory()
 
 	factory.ConnectSetup(func(obj *coreglib.Object) {
-		item := toListItem(obj)
+		item := toCell(obj)
 		renderer := NewGraphRenderer()
 		renderer.SetSizeRequest(100, 28)
 		item.SetChild(renderer)
 	})
 
 	factory.ConnectBind(func(obj *coreglib.Object) {
-		item := toListItem(obj)
+		item := toCell(obj)
 		pos := item.Position()
 		if int(pos) < len(cl.graphCommits) {
 			gc := cl.graphCommits[pos]
@@ -271,7 +272,7 @@ func (cl *CommitLog) addHashColumn() {
 	factory := gtk.NewSignalListItemFactory()
 
 	factory.ConnectSetup(func(obj *coreglib.Object) {
-		item := toListItem(obj)
+		item := toCell(obj)
 		label := gtk.NewLabel("")
 		label.SetXAlign(0)
 		label.AddCSSClass("monospace")
@@ -280,7 +281,7 @@ func (cl *CommitLog) addHashColumn() {
 	})
 
 	factory.ConnectBind(func(obj *coreglib.Object) {
-		item := toListItem(obj)
+		item := toCell(obj)
 		pos := item.Position()
 		if int(pos) < len(cl.commits) {
 			label := item.Child().(*gtk.Label)
@@ -298,7 +299,7 @@ func (cl *CommitLog) addSubjectColumn() {
 	factory := gtk.NewSignalListItemFactory()
 
 	factory.ConnectSetup(func(obj *coreglib.Object) {
-		item := toListItem(obj)
+		item := toCell(obj)
 		label := gtk.NewLabel("")
 		label.SetXAlign(0)
 		label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
@@ -307,7 +308,7 @@ func (cl *CommitLog) addSubjectColumn() {
 	})
 
 	factory.ConnectBind(func(obj *coreglib.Object) {
-		item := toListItem(obj)
+		item := toCell(obj)
 		pos := item.Position()
 		if int(pos) < len(cl.commits) {
 			label := item.Child().(*gtk.Label)
@@ -325,7 +326,7 @@ func (cl *CommitLog) addAuthorColumn() {
 	factory := gtk.NewSignalListItemFactory()
 
 	factory.ConnectSetup(func(obj *coreglib.Object) {
-		item := toListItem(obj)
+		item := toCell(obj)
 		label := gtk.NewLabel("")
 		label.SetXAlign(0)
 		label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
@@ -333,7 +334,7 @@ func (cl *CommitLog) addAuthorColumn() {
 	})
 
 	factory.ConnectBind(func(obj *coreglib.Object) {
-		item := toListItem(obj)
+		item := toCell(obj)
 		pos := item.Position()
 		if int(pos) < len(cl.commits) {
 			label := item.Child().(*gtk.Label)
@@ -351,7 +352,7 @@ func (cl *CommitLog) addDateColumn() {
 	factory := gtk.NewSignalListItemFactory()
 
 	factory.ConnectSetup(func(obj *coreglib.Object) {
-		item := toListItem(obj)
+		item := toCell(obj)
 		label := gtk.NewLabel("")
 		label.SetXAlign(0)
 		label.AddCSSClass("dim-label")
@@ -359,7 +360,7 @@ func (cl *CommitLog) addDateColumn() {
 	})
 
 	factory.ConnectBind(func(obj *coreglib.Object) {
-		item := toListItem(obj)
+		item := toCell(obj)
 		pos := item.Position()
 		if int(pos) < len(cl.commits) {
 			label := item.Child().(*gtk.Label)
@@ -377,13 +378,13 @@ func (cl *CommitLog) addRefsColumn() {
 	factory := gtk.NewSignalListItemFactory()
 
 	factory.ConnectSetup(func(obj *coreglib.Object) {
-		item := toListItem(obj)
+		item := toCell(obj)
 		box := gtk.NewBox(gtk.OrientationHorizontal, 4)
 		item.SetChild(box)
 	})
 
 	factory.ConnectBind(func(obj *coreglib.Object) {
-		item := toListItem(obj)
+		item := toCell(obj)
 		box := item.Child().(*gtk.Box)
 
 		// Clear existing pills.
