@@ -1,43 +1,55 @@
-// Package dialogs — stash.go implements the stash management dialog.
-//
-// Note: go-git v5 has limited stash support. This dialog provides the
-// UI framework; the actual stash operations will need a future go-git
-// update or shell-out to the git CLI.
+// Package dialogs — stash.go implements the stash creation dialog.
 package dialogs
 
 import (
+	"log/slog"
+
+	"github.com/MedaiP90/GiTK/git"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
+	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
 
-// ShowStashDialog shows the stash management dialog.
-func ShowStashDialog(parent *adw.ApplicationWindow, onDone func(string)) {
+// ShowStashDialog shows the stash creation dialog.
+// On success, onDone is called with a status message.
+func ShowStashDialog(parent *adw.ApplicationWindow, repo *git.Repository, onDone func(string)) {
 	dialog := adw.NewDialog()
-	dialog.SetTitle("Stash")
+	dialog.SetTitle("Stash Changes")
 	dialog.SetContentWidth(400)
-	dialog.SetContentHeight(200)
+	dialog.SetContentHeight(180)
 
 	// Message entry.
 	messageEntry := adw.NewEntryRow()
-	messageEntry.SetTitle("Stash Message (optional)")
-
-	// Include untracked toggle.
-	untrackedRow := adw.NewSwitchRow()
-	untrackedRow.SetTitle("Include Untracked Files")
+	messageEntry.SetTitle("Message (optional)")
 
 	group := adw.NewPreferencesGroup()
 	group.SetTitle("New Stash")
-	group.SetDescription("Stash support requires git CLI (go-git limitation).")
 	group.Add(messageEntry)
-	group.Add(untrackedRow)
 
 	cancelBtn := gtk.NewButtonWithLabel("Cancel")
 	cancelBtn.ConnectClicked(func() { dialog.Close() })
 
 	stashBtn := gtk.NewButtonWithLabel("Stash")
 	stashBtn.AddCSSClass("suggested-action")
-	stashBtn.SetSensitive(false) // Disabled until go-git supports stash.
-	stashBtn.SetTooltipText("Stash is not yet supported by the go-git backend")
+	stashBtn.ConnectClicked(func() {
+		msg := messageEntry.Text()
+		go func() {
+			err := repo.StashSave(msg)
+			glib.IdleAdd(func() {
+				dialog.Close()
+				if err != nil {
+					slog.Warn("stash save failed", "error", err)
+					if onDone != nil {
+						onDone("Stash failed: " + err.Error())
+					}
+					return
+				}
+				if onDone != nil {
+					onDone("Changes stashed")
+				}
+			})
+		}()
+	})
 
 	btnBox := gtk.NewBox(gtk.OrientationHorizontal, 12)
 	btnBox.SetHAlign(gtk.AlignEnd)

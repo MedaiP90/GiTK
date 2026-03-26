@@ -18,13 +18,9 @@ import (
 // Parameters:
 //   - branch: the branch information from the git backend.
 //   - isCurrent: true if this is the currently checked-out branch.
-//
-// The row displays:
-//   - Icon: branch-symbolic for local, network-symbolic for remote.
-//   - Title: the branch short name.
-//   - Subtitle: the short commit hash.
-//   - Suffix: checkmark icon if this is the current branch.
-func NewBranchRow(branch git.BranchInfo, isCurrent bool) *adw.ActionRow {
+//   - onDelete: if non-nil, a delete button is shown (non-current local branches only).
+//   - onMerge: if non-nil, a merge button is shown (non-current local branches only).
+func NewBranchRow(branch git.BranchInfo, isCurrent bool, onDelete func(), onMerge func()) *adw.ActionRow {
 	row := adw.NewActionRow()
 	row.SetTitle(branch.Name)
 
@@ -51,6 +47,27 @@ func NewBranchRow(branch git.BranchInfo, isCurrent bool) *adw.ActionRow {
 		row.AddCSSClass("accent")
 	}
 
+	// Merge button — only for non-current local branches.
+	if onMerge != nil {
+		mergeBtn := gtk.NewButtonFromIconName("vcs-merge-symbolic")
+		mergeBtn.SetTooltipText("Merge into current branch")
+		mergeBtn.AddCSSClass("flat")
+		mergeBtn.SetVAlign(gtk.AlignCenter)
+		mergeBtn.ConnectClicked(func() { onMerge() })
+		row.AddSuffix(mergeBtn)
+	}
+
+	// Delete button — only for non-current local branches.
+	if onDelete != nil {
+		deleteBtn := gtk.NewButtonFromIconName("edit-delete-symbolic")
+		deleteBtn.SetTooltipText("Delete branch")
+		deleteBtn.AddCSSClass("flat")
+		deleteBtn.AddCSSClass("error")
+		deleteBtn.SetVAlign(gtk.AlignCenter)
+		deleteBtn.ConnectClicked(func() { onDelete() })
+		row.AddSuffix(deleteBtn)
+	}
+
 	// Make the row activatable so clicking it triggers checkout.
 	row.SetActivatable(true)
 
@@ -61,12 +78,8 @@ func NewBranchRow(branch git.BranchInfo, isCurrent bool) *adw.ActionRow {
 //
 // Parameters:
 //   - tag: the tag information from the git backend.
-//
-// The row displays:
-//   - Icon: tag-symbolic.
-//   - Title: the tag name.
-//   - Subtitle: "annotated" or "lightweight" + short hash.
-func NewTagRow(tag git.TagInfo) *adw.ActionRow {
+//   - onDelete: if non-nil, a delete button is shown for the tag.
+func NewTagRow(tag git.TagInfo, onDelete func()) *adw.ActionRow {
 	row := adw.NewActionRow()
 	row.SetTitle(tag.Name)
 	row.SetIconName("tag-symbolic")
@@ -83,7 +96,18 @@ func NewTagRow(tag git.TagInfo) *adw.ActionRow {
 	}
 	row.SetSubtitle(subtitle)
 
-	row.SetActivatable(true)
+	// Delete button.
+	if onDelete != nil {
+		deleteBtn := gtk.NewButtonFromIconName("edit-delete-symbolic")
+		deleteBtn.SetTooltipText("Delete tag")
+		deleteBtn.AddCSSClass("flat")
+		deleteBtn.AddCSSClass("error")
+		deleteBtn.SetVAlign(gtk.AlignCenter)
+		deleteBtn.ConnectClicked(func() { onDelete() })
+		row.AddSuffix(deleteBtn)
+	}
+
+	row.SetActivatable(false)
 
 	return row
 }

@@ -120,9 +120,15 @@ func (cd *CommitDetail) build() {
 	cd.infoGroup = adw.NewPreferencesGroup()
 	cd.infoGroup.SetTitle("Commit")
 
-	// Actions menu button in the header area — for tag creation etc.
+	// Actions menu button in the header area — for tag creation, reset, etc.
 	actionsMenu := gio.NewMenu()
 	actionsMenu.Append("Create Tag on this Commit…", "detail.create-tag")
+
+	resetSection := gio.NewMenu()
+	resetSection.Append("Reset Soft to Here…", "detail.reset-soft")
+	resetSection.Append("Reset Mixed to Here…", "detail.reset-mixed")
+	resetSection.Append("Reset Hard to Here…", "detail.reset-hard")
+	actionsMenu.AppendSection("Reset", resetSection)
 
 	cd.actionsBtn = gtk.NewMenuButton()
 	cd.actionsBtn.SetIconName("view-more-symbolic")
@@ -210,16 +216,41 @@ func (cd *CommitDetail) build() {
 	cd.Root.SetChild(cd.contentBox)
 	cd.Root.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
 
-	// Register the "detail.create-tag" action on the scrolled window.
+	// Register actions on the scrolled window.
+	actionGroup := gio.NewSimpleActionGroup()
+
 	tagAction := gio.NewSimpleAction("create-tag", nil)
 	tagAction.ConnectActivate(func(param *glib.Variant) {
 		if cd.commit != nil {
-			// Activate the window-level create-tag action with the commit hash.
 			cd.Root.ActivateAction("win.create-tag", glib.NewVariantString(cd.commit.Hash))
 		}
 	})
-	actionGroup := gio.NewSimpleActionGroup()
 	actionGroup.AddAction(tagAction)
+
+	resetSoftAction := gio.NewSimpleAction("reset-soft", nil)
+	resetSoftAction.ConnectActivate(func(param *glib.Variant) {
+		if cd.commit != nil {
+			cd.Root.ActivateAction("win.reset-soft", glib.NewVariantString(cd.commit.Hash))
+		}
+	})
+	actionGroup.AddAction(resetSoftAction)
+
+	resetMixedAction := gio.NewSimpleAction("reset-mixed", nil)
+	resetMixedAction.ConnectActivate(func(param *glib.Variant) {
+		if cd.commit != nil {
+			cd.Root.ActivateAction("win.reset-mixed", glib.NewVariantString(cd.commit.Hash))
+		}
+	})
+	actionGroup.AddAction(resetMixedAction)
+
+	resetHardAction := gio.NewSimpleAction("reset-hard", nil)
+	resetHardAction.ConnectActivate(func(param *glib.Variant) {
+		if cd.commit != nil {
+			cd.Root.ActivateAction("win.reset-hard", glib.NewVariantString(cd.commit.Hash))
+		}
+	})
+	actionGroup.AddAction(resetHardAction)
+
 	cd.Root.InsertActionGroup("detail", actionGroup)
 }
 

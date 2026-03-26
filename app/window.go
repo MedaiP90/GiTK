@@ -36,6 +36,7 @@ import (
 	"github.com/MedaiP90/GiTK/ui/dialogs"
 	"github.com/MedaiP90/GiTK/ui/merge"
 	"github.com/MedaiP90/GiTK/ui/sidebar"
+	"github.com/MedaiP90/GiTK/ui/stash"
 	"github.com/MedaiP90/GiTK/ui/staging"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gdk/v4"
@@ -85,12 +86,17 @@ type Window struct {
 	// mergeView is the three-pane merge editor.
 	mergeView *merge.MergeView
 
+	// stashView is the stash management page.
+	stashView *stash.StashView
+
 	// logBtn and stagingBtn are header bar toggle buttons, kept as fields
-	// so we can update their active state and add badges.
-	logBtn       *gtk.ToggleButton
-	stagingBtn   *gtk.ToggleButton
-	stagingBadge *gtk.Label
-	stashBtn     *gtk.ToggleButton
+	// so we can update their active state.
+	logBtn     *gtk.ToggleButton
+	stagingBtn *gtk.ToggleButton
+	stashBtn   *gtk.ToggleButton
+
+	// stagingChip is the external pill label showing "N changes" next to stagingBtn.
+	stagingChip *gtk.Label
 
 	// repo is the currently open git repository (nil if none).
 	repo *git.Repository
@@ -124,7 +130,15 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 
 	// --- Load custom CSS ---
 	cssProvider := gtk.NewCSSProvider()
-	cssProvider.LoadFromString(`.staging-btn-box { background: transparent; }`)
+	cssProvider.LoadFromString(`
+.staging-btn-wrap { background: transparent; }
+.changes-chip {
+	border-radius: 12px;
+	padding: 2px 8px;
+	background-color: alpha(@accent_bg_color, 0.15);
+	color: @accent_color;
+	font-size: 0.8em;
+}`)
 	gtk.StyleContextAddProviderForDisplay(
 		gdk.DisplayGetDefault(),
 		cssProvider,
@@ -224,32 +238,33 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	// Group with staging button so GTK manages mutual exclusivity.
 	header.PackStart(w.logBtn)
 
-	// Staging button with change count badge.
+	// Staging button — plain icon-only toggle button.
 	w.stagingBtn = gtk.NewToggleButton()
+	w.stagingBtn.SetIconName("document-edit-symbolic")
 	w.stagingBtn.SetTooltipText("Staging Area")
 	w.stagingBtn.SetActive(false)
 	w.stagingBtn.SetSensitive(false) // Disabled until a repo is selected.
 	w.stagingBtn.SetGroup(w.logBtn) // Mutual exclusivity with log button.
-
-	// Use a box with icon + badge label for the staging button.
-	stagingBtnBox := gtk.NewBox(gtk.OrientationHorizontal, 4)
-	stagingBtnBox.AddCSSClass("staging-btn-box")
-	stagingIcon := gtk.NewImageFromIconName("document-edit-symbolic")
-	stagingBtnBox.Append(stagingIcon)
-	w.stagingBadge = gtk.NewLabel("")
-	w.stagingBadge.AddCSSClass("accent")
-	w.stagingBadge.AddCSSClass("caption")
-	w.stagingBadge.SetVisible(false)
-	stagingBtnBox.Append(w.stagingBadge)
-	w.stagingBtn.SetChild(stagingBtnBox)
-
 	w.stagingBtn.ConnectClicked(func() {
 		if w.repo != nil {
 			w.stagingView.SetRepository(w.repo)
 			w.switchToView("staging")
 		}
 	})
-	header.PackStart(w.stagingBtn)
+
+	// External chip label showing "N changes" next to the staging button.
+	w.stagingChip = gtk.NewLabel("")
+	w.stagingChip.AddCSSClass("changes-chip")
+	w.stagingChip.SetVisible(false)
+	w.stagingChip.SetVAlign(gtk.AlignCenter)
+
+	// Wrap button + chip in a horizontal box so they sit side by side.
+	stagingWrap := gtk.NewBox(gtk.OrientationHorizontal, 4)
+	stagingWrap.AddCSSClass("staging-btn-wrap")
+	stagingWrap.SetVAlign(gtk.AlignCenter)
+	stagingWrap.Append(w.stagingBtn)
+	stagingWrap.Append(w.stagingChip)
+	header.PackStart(stagingWrap)
 
 	// Stash button — opens the stash management page.
 	w.stashBtn = gtk.NewToggleButton()
@@ -260,6 +275,7 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	w.stashBtn.SetGroup(w.logBtn) // Mutual exclusivity with log button.
 	w.stashBtn.ConnectClicked(func() {
 		if w.repo != nil {
+			w.stashView.RefreshStashes()
 			w.switchToView("stash")
 		}
 	})
@@ -380,8 +396,16 @@ func newMenu() *gio.Menu {
 func (w *Window) buildContentArea() {
 	// --- Sidebar ---
 	// The sidebar shows recent repositories and branch tree.
-	w.sidebar = sidebar.New(w.cfg, w.onRepoSelected, w.onBranchSelected, func(path string) {
-		w.ShowToast("Repository removed: " + path + " (no longer exists on disk)")
+	w.sidebar = sidebar.New(w.cfg, sidebar.SidebarCallbacks{
+		OnRepoSelected:   w.onRepoSelected,
+		OnBranchSelected: w.onBranchSelected,
+		OnRepoRemoved: func(path string) {
+			w.ShowToast("Repository removed: " + path + " (no longer exists on disk)")
+		},
+		OnBranchDelete: w.onBranchDelete,
+		OnTagDelete:    w.onTagDelete,
+		OnBranchMerge:  w.onBranchMerge,
+		OnAddRemote:    w.onAddRemote,
 	})
 
 	// --- Content area ---
@@ -430,9 +454,13 @@ func (w *Window) buildContentArea() {
 		w.ShowToast("Committed " + hash[:7])
 	}, func() {
 		// Stash button in staging opens the stash dialog.
-		dialogs.ShowStashDialog(w.window, func(msg string) {
-			w.ShowToast(msg)
-		})
+		if w.repo != nil {
+			dialogs.ShowStashDialog(w.window, w.repo, func(msg string) {
+				w.ShowToast(msg)
+				w.stashView.RefreshStashes()
+				w.updateStagingBadge()
+			})
+		}
 	}, func() {
 		// Changes updated — refresh the badge counter.
 		w.updateStagingBadge()
@@ -440,11 +468,17 @@ func (w *Window) buildContentArea() {
 	w.contentStack.AddNamed(w.stagingView.Root, "staging")
 
 	// --- Stash management page ---
-	stashPage := adw.NewStatusPage()
-	stashPage.SetTitle("Stash Management")
-	stashPage.SetDescription("Stash operations are not yet supported by the go-git backend.\nThis feature will be available in a future release.")
-	stashPage.SetIconName("sidebar-show-symbolic")
-	w.contentStack.AddNamed(stashPage, "stash")
+	w.stashView = stash.New(func() {
+		// "Stash Changes" button in stash view opens the stash creation dialog.
+		if w.repo != nil {
+			dialogs.ShowStashDialog(w.window, w.repo, func(msg string) {
+				w.ShowToast(msg)
+				w.stashView.RefreshStashes()
+				w.updateStagingBadge()
+			})
+		}
+	})
+	w.contentStack.AddNamed(w.stashView.Root, "stash")
 
 	// --- Merge view ---
 	w.mergeView = merge.New(
@@ -492,6 +526,7 @@ func (w *Window) onRepoSelected(repo *git.Repository) {
 	w.sidebar.CollapseRecentRepos()
 	w.commitLog.SetRepository(repo)
 	w.commitDetail.SetRepository(repo)
+	w.stashView.SetRepository(repo)
 	w.window.SetTitle(repo.Name())
 
 	// Enable view switcher buttons now that a repo is open.
@@ -532,10 +567,10 @@ func (w *Window) badgePollLoop(stopCh chan struct{}) {
 }
 
 // updateStagingBadge checks for uncommitted changes and updates
-// the staging button badge to show the change count.
+// the external chip label to show the change count.
 func (w *Window) updateStagingBadge() {
 	if w.repo == nil {
-		w.stagingBadge.SetVisible(false)
+		w.stagingChip.SetVisible(false)
 		return
 	}
 
@@ -543,10 +578,10 @@ func (w *Window) updateStagingBadge() {
 		changes, err := w.repo.Status()
 		glib.IdleAdd(func() {
 			if err != nil || len(changes) == 0 {
-				w.stagingBadge.SetVisible(false)
+				w.stagingChip.SetVisible(false)
 			} else {
-				w.stagingBadge.SetText(fmt.Sprintf("%d", len(changes)))
-				w.stagingBadge.SetVisible(true)
+				w.stagingChip.SetText(fmt.Sprintf("%d changes", len(changes)))
+				w.stagingChip.SetVisible(true)
 			}
 		})
 	}()
@@ -573,6 +608,127 @@ func (w *Window) onBranchSelected(branchName string, isRemote bool) {
 			w.sidebar.RefreshBranches()
 		})
 	}()
+}
+
+// onBranchDelete is called by the sidebar when the user clicks the delete button on a branch.
+func (w *Window) onBranchDelete(branchName string) {
+	if w.repo == nil {
+		return
+	}
+
+	dialog := adw.NewAlertDialog(
+		"Delete Branch",
+		fmt.Sprintf("Delete branch '%s'? This cannot be undone.", branchName),
+	)
+	dialog.AddResponse("cancel", "Cancel")
+	dialog.AddResponse("delete", "Delete")
+	dialog.SetResponseAppearance("delete", adw.ResponseDestructive)
+	dialog.SetDefaultResponse("cancel")
+	dialog.SetCloseResponse("cancel")
+	dialog.ConnectResponse(func(response string) {
+		if response != "delete" {
+			return
+		}
+		go func() {
+			err := w.repo.DeleteBranch(branchName)
+			glib.IdleAdd(func() {
+				if err != nil {
+					w.ShowToast("Delete failed: " + err.Error())
+					return
+				}
+				w.ShowToast("Deleted branch " + branchName)
+				w.sidebar.RefreshBranches()
+			})
+		}()
+	})
+	dialog.Present(w.window)
+}
+
+// onTagDelete is called by the sidebar when the user clicks the delete button on a tag.
+func (w *Window) onTagDelete(tagName string) {
+	if w.repo == nil {
+		return
+	}
+
+	dialog := adw.NewAlertDialog(
+		"Delete Tag",
+		fmt.Sprintf("Delete tag '%s'? This cannot be undone.", tagName),
+	)
+	dialog.AddResponse("cancel", "Cancel")
+	dialog.AddResponse("delete", "Delete")
+	dialog.SetResponseAppearance("delete", adw.ResponseDestructive)
+	dialog.SetDefaultResponse("cancel")
+	dialog.SetCloseResponse("cancel")
+	dialog.ConnectResponse(func(response string) {
+		if response != "delete" {
+			return
+		}
+		go func() {
+			err := w.repo.DeleteTag(tagName)
+			glib.IdleAdd(func() {
+				if err != nil {
+					w.ShowToast("Delete failed: " + err.Error())
+					return
+				}
+				w.ShowToast("Deleted tag " + tagName)
+				w.sidebar.RefreshBranches()
+			})
+		}()
+	})
+	dialog.Present(w.window)
+}
+
+// onBranchMerge is called by the sidebar when the user requests merging a branch into the current one.
+func (w *Window) onBranchMerge(branchName string) {
+	if w.repo == nil {
+		return
+	}
+	current := w.repo.CurrentBranch()
+
+	dialog := adw.NewAlertDialog(
+		"Merge Branch",
+		fmt.Sprintf("Merge '%s' into '%s'?", branchName, current),
+	)
+	dialog.AddResponse("cancel", "Cancel")
+	dialog.AddResponse("merge", "Merge")
+	dialog.SetResponseAppearance("merge", adw.ResponseSuggested)
+	dialog.SetDefaultResponse("merge")
+	dialog.SetCloseResponse("cancel")
+	dialog.ConnectResponse(func(response string) {
+		if response != "merge" {
+			return
+		}
+		go func() {
+			err := w.repo.MergeBranch(branchName)
+			glib.IdleAdd(func() {
+				if err != nil {
+					msg := err.Error()
+					w.ShowToast("Merge: " + msg)
+					// If it's a conflict, switch to staging so user can resolve.
+					if strings.Contains(msg, "conflict") || strings.Contains(msg, "CONFLICT") {
+						w.stagingView.SetRepository(w.repo)
+						w.switchToView("staging")
+					}
+					return
+				}
+				w.ShowToast("Merged " + branchName + " into " + current)
+				w.commitLog.SetRepository(w.repo)
+				w.sidebar.RefreshBranches()
+			})
+		}()
+	})
+	dialog.Present(w.window)
+}
+
+// onAddRemote opens the Add Remote dialog.
+func (w *Window) onAddRemote() {
+	if w.repo == nil {
+		return
+	}
+	dialogs.ShowAddRemoteDialog(w.window, w.repo, func(msg string) {
+		w.ShowToast(msg)
+		w.sidebar.RefreshBranches()
+	})
 }
 
 // registerWindowActions registers GActions scoped to this window.
@@ -605,6 +761,70 @@ func (w *Window) registerWindowActions() {
 	})
 	w.window.AddAction(tagAction)
 
+	// Reset Soft action — moves HEAD, keeps changes staged.
+	resetSoftAction := gio.NewSimpleAction("reset-soft", glib.NewVariantType("s"))
+	resetSoftAction.ConnectActivate(func(param *glib.Variant) {
+		if w.repo == nil || param == nil {
+			return
+		}
+		commitHash := strings.Trim(param.String(), "'\"")
+		w.doReset(commitHash, git.ResetSoft, "Soft reset to "+commitHash[:7])
+	})
+	w.window.AddAction(resetSoftAction)
+
+	// Reset Mixed action — moves HEAD, unstages changes.
+	resetMixedAction := gio.NewSimpleAction("reset-mixed", glib.NewVariantType("s"))
+	resetMixedAction.ConnectActivate(func(param *glib.Variant) {
+		if w.repo == nil || param == nil {
+			return
+		}
+		commitHash := strings.Trim(param.String(), "'\"")
+		w.doReset(commitHash, git.ResetMixed, "Mixed reset to "+commitHash[:7])
+	})
+	w.window.AddAction(resetMixedAction)
+
+	// Reset Hard action — moves HEAD and discards all changes. Shows confirmation.
+	resetHardAction := gio.NewSimpleAction("reset-hard", glib.NewVariantType("s"))
+	resetHardAction.ConnectActivate(func(param *glib.Variant) {
+		if w.repo == nil || param == nil {
+			return
+		}
+		commitHash := strings.Trim(param.String(), "'\"")
+		dialog := adw.NewAlertDialog(
+			"Hard Reset",
+			"This will discard all uncommitted changes and reset the working tree to commit "+commitHash[:7]+". This cannot be undone.",
+		)
+		dialog.AddResponse("cancel", "Cancel")
+		dialog.AddResponse("reset", "Reset Hard")
+		dialog.SetResponseAppearance("reset", adw.ResponseDestructive)
+		dialog.SetDefaultResponse("cancel")
+		dialog.SetCloseResponse("cancel")
+		dialog.ConnectResponse(func(response string) {
+			if response == "reset" {
+				w.doReset(commitHash, git.ResetHard, "Hard reset to "+commitHash[:7])
+			}
+		})
+		dialog.Present(w.window)
+	})
+	w.window.AddAction(resetHardAction)
+
+}
+
+// doReset performs a git reset to the given commit hash with the specified mode.
+func (w *Window) doReset(commitHash string, mode git.ResetMode, successMsg string) {
+	go func() {
+		err := w.repo.Reset(commitHash, mode)
+		glib.IdleAdd(func() {
+			if err != nil {
+				w.ShowToast("Reset failed: " + err.Error())
+				return
+			}
+			w.ShowToast(successMsg)
+			w.commitLog.SetRepository(w.repo)
+			w.sidebar.RefreshBranches()
+			w.updateStagingBadge()
+		})
+	}()
 }
 
 // onOpenRepository handles the "Open Repository" action. It shows a native

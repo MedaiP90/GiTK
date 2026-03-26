@@ -17,7 +17,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -756,6 +758,19 @@ func (r *Repository) Reset(commitHash string, mode ResetMode) error {
 	return nil
 }
 
+// MergeBranch merges the given branch into the current branch.
+// It shells out to the git CLI because go-git's merge support is limited.
+func (r *Repository) MergeBranch(branchName string) error {
+	cmd := exec.Command("git", "merge", "--no-edit", branchName)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("merge %s: %s", branchName, strings.TrimSpace(string(out)))
+	}
+	slog.Info("merged branch", "branch", branchName)
+	return nil
+}
+
 // AddRemote adds a new remote to the repository.
 func (r *Repository) AddRemote(name, url string) error {
 	r.mu.Lock()
@@ -1028,36 +1043,89 @@ type StashInfo struct {
 	Hash string
 }
 
-// Note: go-git has limited stash support. The Stash/StashPop/StashList
-// methods below use the available API. For full stash support, we may
-// need to shell out to git in the future.
-
 // StashSave creates a new stash entry with the current changes.
-// Note: go-git's stash support is limited. This is a best-effort
-// implementation.
+// It shells out to the git CLI because go-git v5 has no built-in stash support.
 func (r *Repository) StashSave(message string) error {
-	// go-git v5 does not have built-in stash support.
-	// For now, return an informative error. In the future, we could
-	// shell out to the git CLI for this operation.
-	return fmt.Errorf("stash save: not yet implemented in go-git backend")
+	args := []string{"stash", "push"}
+	if message != "" {
+		args = append(args, "-m", message)
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stash save: %s", strings.TrimSpace(string(out)))
+	}
+	output := strings.TrimSpace(string(out))
+	if output == "No local changes to save" {
+		return fmt.Errorf("stash save: no local changes to save")
+	}
+	slog.Info("stash saved", "message", message)
+	return nil
 }
 
 // StashList returns the list of stash entries.
+// It parses the output of "git stash list --format=%H %s".
 func (r *Repository) StashList() ([]StashInfo, error) {
-	return nil, fmt.Errorf("stash list: not yet implemented in go-git backend")
+	cmd := exec.Command("git", "stash", "list", "--format=%H\t%s")
+	cmd.Dir = r.path
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("stash list: %w", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var stashes []StashInfo
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		hash := ""
+		msg := line
+		if len(parts) == 2 {
+			hash = parts[0]
+			msg = parts[1]
+		}
+		stashes = append(stashes, StashInfo{Index: i, Message: msg, Hash: hash})
+	}
+	return stashes, nil
 }
 
-// StashApply applies a stash entry without removing it.
+// StashApply applies a stash entry without removing it from the stash list.
 func (r *Repository) StashApply(index int) error {
-	return fmt.Errorf("stash apply: not yet implemented in go-git backend")
+	ref := "stash@{" + strconv.Itoa(index) + "}"
+	cmd := exec.Command("git", "stash", "apply", ref)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stash apply: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("stash applied", "index", index)
+	return nil
 }
 
 // StashPop applies and removes a stash entry.
 func (r *Repository) StashPop(index int) error {
-	return fmt.Errorf("stash pop: not yet implemented in go-git backend")
+	ref := "stash@{" + strconv.Itoa(index) + "}"
+	cmd := exec.Command("git", "stash", "pop", ref)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stash pop: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("stash popped", "index", index)
+	return nil
 }
 
 // StashDrop removes a stash entry without applying it.
 func (r *Repository) StashDrop(index int) error {
-	return fmt.Errorf("stash drop: not yet implemented in go-git backend")
+	ref := "stash@{" + strconv.Itoa(index) + "}"
+	cmd := exec.Command("git", "stash", "drop", ref)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stash drop: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("stash dropped", "index", index)
+	return nil
 }

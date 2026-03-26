@@ -45,6 +45,18 @@ type OnBranchSelected func(branchName string, isRemote bool)
 // is found to be deleted from the filesystem and removed from the list.
 type OnRepoRemoved func(path string)
 
+// OnBranchDelete is a callback invoked when the user requests to delete a local branch.
+type OnBranchDelete func(branchName string)
+
+// OnTagDelete is a callback invoked when the user requests to delete a tag.
+type OnTagDelete func(tagName string)
+
+// OnBranchMerge is a callback invoked when the user requests to merge a branch into the current one.
+type OnBranchMerge func(branchName string)
+
+// OnAddRemote is a callback invoked when the user wants to add a new remote.
+type OnAddRemote func()
+
 // Sidebar is the left sidebar widget. It shows repositories and branches.
 type Sidebar struct {
 	// Root is the top-level widget to embed in the NavigationSplitView.
@@ -64,6 +76,18 @@ type Sidebar struct {
 
 	// onRepoRemoved is called when a repo is found to be deleted.
 	onRepoRemoved OnRepoRemoved
+
+	// onBranchDelete is called when the user requests to delete a local branch.
+	onBranchDelete OnBranchDelete
+
+	// onTagDelete is called when the user requests to delete a tag.
+	onTagDelete OnTagDelete
+
+	// onBranchMerge is called when the user requests to merge a branch into the current one.
+	onBranchMerge OnBranchMerge
+
+	// onAddRemote is called when the user wants to add a new remote.
+	onAddRemote OnAddRemote
 
 	// recentListBox shows recently opened repositories.
 	recentListBox *gtk.ListBox
@@ -91,12 +115,27 @@ type Sidebar struct {
 //   - cfg: application configuration (for recent repositories list).
 //   - onRepoSelected: callback when a repository is selected.
 //   - onBranchSelected: callback when a branch is selected.
-func New(cfg *config.Config, onRepoSelected OnRepoSelected, onBranchSelected OnBranchSelected, onRepoRemoved OnRepoRemoved) *Sidebar {
+// SidebarCallbacks groups all optional action callbacks for the sidebar.
+type SidebarCallbacks struct {
+	OnRepoSelected  OnRepoSelected
+	OnBranchSelected OnBranchSelected
+	OnRepoRemoved   OnRepoRemoved
+	OnBranchDelete  OnBranchDelete
+	OnTagDelete     OnTagDelete
+	OnBranchMerge   OnBranchMerge
+	OnAddRemote     OnAddRemote
+}
+
+func New(cfg *config.Config, cb SidebarCallbacks) *Sidebar {
 	s := &Sidebar{
 		cfg:              cfg,
-		onRepoSelected:   onRepoSelected,
-		onBranchSelected: onBranchSelected,
-		onRepoRemoved:    onRepoRemoved,
+		onRepoSelected:   cb.OnRepoSelected,
+		onBranchSelected: cb.OnBranchSelected,
+		onRepoRemoved:    cb.OnRepoRemoved,
+		onBranchDelete:   cb.OnBranchDelete,
+		onTagDelete:      cb.OnTagDelete,
+		onBranchMerge:    cb.OnBranchMerge,
+		onAddRemote:      cb.OnAddRemote,
 	}
 
 	s.build()
@@ -241,6 +280,20 @@ func (s *Sidebar) RefreshRecent() {
 			s.openRepo(repoPath)
 		})
 
+		// Remove button — lets users manually remove a repo from the recent list.
+		removeBtn := gtk.NewButtonFromIconName("list-remove-symbolic")
+		removeBtn.SetTooltipText("Remove from recent")
+		removeBtn.AddCSSClass("flat")
+		removeBtn.SetVAlign(gtk.AlignCenter)
+		removeBtn.ConnectClicked(func() {
+			s.cfg.RemoveRecentRepository(repoPath)
+			if err := s.cfg.Save(); err != nil {
+				slog.Warn("failed to save config after removing recent repo", "error", err)
+			}
+			s.RefreshRecent()
+		})
+		row.AddSuffix(removeBtn)
+
 		// Check if repo is dirty (has uncommitted changes) in background.
 		go func(p string, r *adw.ActionRow) {
 			repo, err := git.OpenRepository(p)
@@ -310,11 +363,26 @@ func (s *Sidebar) RefreshBranches() {
 	remoteCount := 0
 
 	for _, branch := range branches {
-		row := NewBranchRow(branch, branch.Name == currentBranch)
-
-		// Wire click to trigger branch checkout.
+		isCurrent := branch.Name == currentBranch
 		branchName := branch.Name
 		isRemote := branch.IsRemote
+
+		var onDelete func()
+		var onMerge func()
+		if !isRemote && !isCurrent {
+			onDelete = func() {
+				if s.onBranchDelete != nil {
+					s.onBranchDelete(branchName)
+				}
+			}
+			onMerge = func() {
+				if s.onBranchMerge != nil {
+					s.onBranchMerge(branchName)
+				}
+			}
+		}
+
+		row := NewBranchRow(branch, isCurrent, onDelete, onMerge)
 		row.ConnectActivated(func() {
 			if s.onBranchSelected != nil {
 				s.onBranchSelected(branchName, isRemote)
@@ -349,12 +417,55 @@ func (s *Sidebar) RefreshBranches() {
 	tagsExpander.SetExpanded(false)
 
 	for _, tag := range tags {
-		row := NewTagRow(tag)
+		tagName := tag.Name
+		onTagDelete := func() {
+			if s.onTagDelete != nil {
+				s.onTagDelete(tagName)
+			}
+		}
+		row := NewTagRow(tag, onTagDelete)
 		tagsExpander.AddRow(row)
 	}
 
 	tagsExpander.SetSubtitle(formatCount(len(tags)))
 	s.branchListBox.Append(tagsExpander)
+
+	// Load remotes.
+	remotes, err := s.repo.Remotes()
+	if err != nil {
+		slog.Warn("failed to load remotes", "error", err)
+		return
+	}
+
+	remotesExpander := adw.NewExpanderRow()
+	remotesExpander.SetTitle("Remotes")
+	remotesExpander.SetIconName("network-server-symbolic")
+	remotesExpander.SetExpanded(false)
+	remotesExpander.SetSubtitle(formatCount(len(remotes)))
+
+	// "Add Remote" button in the remotes expander header.
+	addRemoteBtn := gtk.NewButtonFromIconName("list-add-symbolic")
+	addRemoteBtn.SetTooltipText("Add Remote")
+	addRemoteBtn.AddCSSClass("flat")
+	addRemoteBtn.SetVAlign(gtk.AlignCenter)
+	addRemoteBtn.ConnectClicked(func() {
+		if s.onAddRemote != nil {
+			s.onAddRemote()
+		}
+	})
+	remotesExpander.AddSuffix(addRemoteBtn)
+
+	for _, remote := range remotes {
+		row := adw.NewActionRow()
+		row.SetTitle(remote.Name)
+		if len(remote.URLs) > 0 {
+			row.SetSubtitle(remote.URLs[0])
+		}
+		row.SetIconName("network-server-symbolic")
+		remotesExpander.AddRow(row)
+	}
+
+	s.branchListBox.Append(remotesExpander)
 }
 
 // openRepo opens a repository at the given path and notifies the callback.

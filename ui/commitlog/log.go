@@ -55,6 +55,9 @@ type CommitLog struct {
 	// graphCommits holds the graph layout data for the graph column.
 	graphCommits []git.GraphCommit
 
+	// graphCommitMap maps hash → GraphCommit for O(1) lookup during bind.
+	graphCommitMap map[string]git.GraphCommit
+
 	// columnView is the GtkColumnView table widget.
 	columnView *gtk.ColumnView
 
@@ -78,6 +81,7 @@ type CommitLog struct {
 func New(onCommitSelected OnCommitSelected) *CommitLog {
 	cl := &CommitLog{
 		commitMap:        make(map[string]git.CommitInfo),
+		graphCommitMap:   make(map[string]git.GraphCommit),
 		onCommitSelected: onCommitSelected,
 	}
 
@@ -179,8 +183,8 @@ func (cl *CommitLog) Refresh() {
 		return
 	}
 
-	// Load commits.
-	commits, err := cl.repo.Log(2000)
+	// Load all commits (all branches) so the list matches the graph data.
+	commits, err := cl.repo.LogAll(2000)
 	if err != nil {
 		slog.Warn("failed to load commit log", "error", err)
 		return
@@ -192,6 +196,12 @@ func (cl *CommitLog) Refresh() {
 		slog.Warn("failed to build graph", "error", err)
 	}
 	cl.graphCommits = graphCommits
+
+	// Build a hash → GraphCommit map for O(1) lookup in the bind callback.
+	cl.graphCommitMap = make(map[string]git.GraphCommit, len(graphCommits))
+	for _, gc := range graphCommits {
+		cl.graphCommitMap[gc.Hash] = gc
+	}
 
 	cl.allCommits = commits
 	cl.setCommits(commits)
@@ -255,10 +265,8 @@ func (cl *CommitLog) applyFilter(query string) {
 
 // RefsForCommit returns the graph refs (branches/tags) for a given commit hash.
 func (cl *CommitLog) RefsForCommit(hash string) []git.GraphRef {
-	for _, gc := range cl.graphCommits {
-		if gc.Hash == hash {
-			return gc.Refs
-		}
+	if gc, ok := cl.graphCommitMap[hash]; ok {
+		return gc.Refs
 	}
 	return nil
 }
@@ -285,10 +293,11 @@ func (cl *CommitLog) addGraphColumn() {
 	factory.ConnectBind(func(obj *coreglib.Object) {
 		item := toCell(obj)
 		pos := item.Position()
-		if int(pos) < len(cl.graphCommits) {
-			gc := cl.graphCommits[pos]
-			da := item.Child().(*gtk.DrawingArea)
-			SetGraphCommit(da, gc)
+		da := item.Child().(*gtk.DrawingArea)
+		if int(pos) < len(cl.commits) {
+			if gc, ok := cl.graphCommitMap[cl.commits[pos].Hash]; ok {
+				SetGraphCommit(da, gc)
+			}
 		}
 	})
 
