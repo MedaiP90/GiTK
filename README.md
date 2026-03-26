@@ -10,22 +10,27 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 
 ### Repository Management
 - Open local repositories via native file chooser (xdg-desktop-portal)
-- Clone remote repositories with progress tracking
-- Recent repositories list with quick access from the sidebar
+- Clone remote repositories with progress tracking (auto-creates subdirectory named after the project)
+- Recent repositories list with quick access from the sidebar (auto-collapses on selection)
+- Change indicator badge on the staging button and recent repos list
+- Toolbar buttons disabled when no repository is selected
 - XDG-compliant JSON configuration (`~/.config/gitk/config.json`)
 
 ### Commit History
 - Commit log table using `GtkColumnView` with columns: Graph, Hash, Subject, Author, Date, Refs
 - Inline graph column rendering branch/merge topology with colored lanes
 - Commit detail panel showing full metadata, message, and changed file list with +/- stats
-- Unified diff viewer with syntax-colored added/deleted/context lines
+- Inline expandable diffs under each file in the commit detail panel with syntax-colored added/deleted/context lines
+- Right-click context menu on commits (e.g., Create Tag)
 - Search filtering by message, author, or hash
 
 ### Staging Area
-- Split view: staged files, unstaged files, and hunk-level diff
+- Split view: unstaged files first, then staged files, with hunk-level diff
 - Stage/unstage individual files or all at once
 - Per-hunk staging with colored diff display
 - Commit message editor with subject line character counter (orange at 50, red at 72)
+- AI-powered commit message generation button (when enabled in Preferences)
+- Stash button for managing stashed changes
 - Async commit creation with toast notifications
 
 ### Visual DAG Graph View
@@ -44,11 +49,10 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 ### Remote Operations
 - Push dialog with remote selection and force-push toggle (with destructive action confirmation via `AdwAlertDialog`)
 - Pull dialog with remote and branch selection
-- Fetch all remotes from the menu
 
 ### Tag & Stash
-- Create tag dialog (lightweight or annotated) with target commit field
-- Stash dialog (UI ready; stash operations pending go-git backend support)
+- Create tag dialog (lightweight or annotated) — tags are automatically pushed to the remote after creation
+- Stash button in the staging area (stash operations pending go-git backend support)
 
 ### Three-Way Merge Editor
 - Three-pane layout: OURS (read-only) | RESULT (editable) | THEIRS (read-only)
@@ -58,9 +62,9 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 - Abort Merge with destructive action confirmation
 
 ### Preferences
-- `AdwPreferencesWindow` with pages for Identity, Graph, and AI settings
+- `AdwPreferencesWindow` with pages for Git identity/fetch settings and AI configuration
 - Git author name/email with per-repo override toggle
-- Graph settings: max commits, show tags, show remotes
+- GNOME-style theme selector with light/dark/default circles
 - Settings persist to JSON config on window close
 
 ### AI Commit Message Generation (Optional)
@@ -188,11 +192,11 @@ make lint                  # go vet + staticcheck (if installed)
 
 1. Run the app with `make run`
 2. Click **Open** (folder icon) and select a local Git repository
-3. Browse the commit log, click commits to see details and diffs
-4. Switch to **Staging** (pencil icon) to see working tree changes
-5. Switch to **Graph** (grid icon) for the visual DAG view
+3. Browse the commit log, click commits to see details; click files to expand inline diffs
+4. Right-click a commit to create a tag
+5. Switch to **Staging** (pencil icon) to see working tree changes
 6. Use **Push/Pull** buttons in the header bar for remote operations
-7. Open the hamburger menu for Tag, Stash, Fetch, Preferences, and About
+7. Open the hamburger menu for Preferences and About
 
 ---
 
@@ -232,8 +236,7 @@ GiTK/
 │   │   └── graphrenderer.go         #   Cairo graph column renderer
 │   │
 │   ├── commitdetail/
-│   │   ├── detail.go                #   Commit metadata + file list
-│   │   └── diffview.go              #   Unified diff viewer (GtkTextView)
+│   │   └── detail.go                #   Commit metadata + file list with inline diffs
 │   │
 │   ├── staging/
 │   │   ├── staging.go               #   Staged/unstaged file lists + commit
@@ -365,10 +368,12 @@ The app ID `io.github.MedaiP90.GiTK` follows the Flathub verification format.
 - [x] Staging area with hunk-level staging
 - [x] Visual DAG graph view
 - [x] Three-way merge editor
-- [x] Remote operations (push, pull, fetch)
-- [x] Tag and stash dialogs
+- [x] Remote operations (push, pull)
+- [x] Tag creation with auto-push to remote
+- [x] Inline expandable diffs in commit detail
+- [x] AI commit message button in staging area
+- [x] GNOME-style theme selector
 - [x] Preferences window
-- [x] AI commit message generation
 - [x] Flatpak packaging files
 
 ### v0.2.0 (Planned)
