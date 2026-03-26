@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.MedaiP90.GiTK</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>GiTK</name>
+  <summary>A comprehensive GTK4 Git GUI client for GNOME</summary>
+
+  <description>
+    <p>
+      GiTK is a native GTK4 Git GUI client built for GNOME. It provides
+      a full-featured graphical interface for managing Git repositories,
+      including commit history browsing, staging changes, branch management,
+      visual DAG graph view, and three-way merge conflict resolution.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Repository management with recent repos list</li>
+      <li>Commit log with DAG graph visualization</li>
+      <li>Staging area with hunk-level staging</li>
+      <li>Branch and tag management</li>
+      <li>Remote operations (push, pull, fetch)</li>
+      <li>Three-way merge editor for conflict resolution</li>
+      <li>Visual interactive commit graph</li>
+      <li>Optional AI commit message generation via Claude</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.MedaiP90.GiTK.desktop</launchable>
+
+  <url type="homepage">https://github.com/MedaiP90/GiTK</url>
+  <url type="bugtracker">https://github.com/MedaiP90/GiTK/issues</url>
+  <url type="vcs-browser">https://github.com/MedaiP90/GiTK</url>
+
+  <developer id="io.github.MedaiP90">
+    <name>MedaiP90</name>
+  </developer>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#62a0ea</color>
+    <color type="primary" scheme_preference="dark">#1a5fb4</color>
+  </branding>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="0.1.0" date="2026-03-25">
+      <description>
+        <p>Initial release with core features:</p>
+        <ul>
+          <li>Repository open and clone</li>
+          <li>Commit log with graph column</li>
+          <li>Staging area</li>
+          <li>Branch and tag management</li>
+          <li>Remote operations</li>
+          <li>Visual graph view</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+</component>

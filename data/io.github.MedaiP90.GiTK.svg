@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="#1a5fb4"/>
+
+  <!-- Git branch lines -->
+  <line x1="44" y1="28" x2="44" y2="100" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+  <line x1="74" y1="48" x2="74" y2="80" stroke="#62a0ea" stroke-width="4" stroke-linecap="round"/>
+  <path d="M44,50 C44,50 54,50 74,48" stroke="#62a0ea" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M74,80 C74,80 54,80 44,82" stroke="#62a0ea" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+  <!-- Commit nodes -->
+  <circle cx="44" cy="36" r="6" fill="#fff"/>
+  <circle cx="44" cy="50" r="6" fill="#fff"/>
+  <circle cx="44" cy="82" r="6" fill="#fff"/>
+  <circle cx="44" cy="96" r="6" fill="#fff"/>
+  <circle cx="74" cy="48" r="5" fill="#62a0ea" stroke="#fff" stroke-width="2"/>
+  <circle cx="74" cy="65" r="5" fill="#62a0ea" stroke="#fff" stroke-width="2"/>
+  <circle cx="74" cy="80" r="5" fill="#62a0ea" stroke="#fff" stroke-width="2"/>
+</svg>

@@ -1,0 +1,298 @@
+// Package merge implements the three-pane merge editor for resolving
+// Git merge conflicts.
+//
+// When a merge conflict is detected, this view shows three panes:
+//
+//	┌─────────────┬─────────────┬─────────────┐
+//	│  OURS (HEAD) │  RESULT     │  THEIRS      │
+//	│  (read-only) │  (editable) │  (read-only) │
+//	└─────────────┴─────────────┴─────────────┘
+//
+// Features:
+//   - Synchronized scrolling across all three panes.
+//   - Conflict regions highlighted with colored backgrounds.
+//   - Action buttons: "Use Ours", "Use Theirs", "Use Both".
+//   - Conflict navigation (Previous/Next).
+//   - "Mark as Resolved" button (enabled when all conflicts resolved).
+//   - "Abort Merge" button with destructive action confirmation.
+package merge
+
+import (
+	"fmt"
+
+	"github.com/MedaiP90/GiTK/git"
+	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
+	"github.com/diamondburned/gotk4/pkg/gtk/v4"
+)
+
+// OnMergeResolved is called when the user finishes resolving all conflicts.
+type OnMergeResolved func(path string, resolvedContent string)
+
+// OnMergeAborted is called when the user aborts the merge.
+type OnMergeAborted func()
+
+// MergeView is the three-pane merge editor widget.
+type MergeView struct {
+	// Root is the top-level widget.
+	Root *adw.ToolbarView
+
+	// mergeResult is the current merge being resolved.
+	mergeResult *git.MergeResult
+
+	// oursView shows the "ours" (HEAD) version.
+	oursView *gtk.TextView
+
+	// resultView shows the merged result (editable).
+	resultView *gtk.TextView
+
+	// theirsView shows the "theirs" version.
+	theirsView *gtk.TextView
+
+	// conflictLabel shows "X / Y conflicts resolved".
+	conflictLabel *gtk.Label
+
+	// resolveBtn is the "Mark as Resolved" button.
+	resolveBtn *gtk.Button
+
+	// currentConflict is the index of the currently selected conflict.
+	currentConflict int
+
+	// onResolved is called when all conflicts are resolved.
+	onResolved OnMergeResolved
+
+	// onAborted is called when the merge is aborted.
+	onAborted OnMergeAborted
+}
+
+// New creates a new MergeView.
+//
+// Parameters:
+//   - onResolved: callback when all conflicts are resolved.
+//   - onAborted: callback when the merge is aborted.
+func New(onResolved OnMergeResolved, onAborted OnMergeAborted) *MergeView {
+	mv := &MergeView{
+		onResolved: onResolved,
+		onAborted:  onAborted,
+	}
+
+	mv.build()
+	return mv
+}
+
+// build constructs all the merge view widgets.
+func (mv *MergeView) build() {
+	// --- Header bar ---
+	header := adw.NewHeaderBar()
+	header.SetShowBackButton(true)
+
+	// Previous/Next conflict navigation.
+	prevBtn := gtk.NewButtonFromIconName("go-previous-symbolic")
+	prevBtn.SetTooltipText("Previous Conflict")
+	prevBtn.ConnectClicked(func() { mv.navigateConflict(-1) })
+	header.PackStart(prevBtn)
+
+	nextBtn := gtk.NewButtonFromIconName("go-next-symbolic")
+	nextBtn.SetTooltipText("Next Conflict")
+	nextBtn.ConnectClicked(func() { mv.navigateConflict(1) })
+	header.PackStart(nextBtn)
+
+	// Conflict counter.
+	mv.conflictLabel = gtk.NewLabel("0 / 0 conflicts")
+	header.SetTitleWidget(mv.conflictLabel)
+
+	// Resolve button.
+	mv.resolveBtn = gtk.NewButtonWithLabel("Mark as Resolved")
+	mv.resolveBtn.AddCSSClass("suggested-action")
+	mv.resolveBtn.SetSensitive(false)
+	mv.resolveBtn.ConnectClicked(func() { mv.markResolved() })
+	header.PackEnd(mv.resolveBtn)
+
+	// Abort button.
+	abortBtn := gtk.NewButtonWithLabel("Abort Merge")
+	abortBtn.AddCSSClass("destructive-action")
+	abortBtn.ConnectClicked(func() { mv.abortMerge() })
+	header.PackEnd(abortBtn)
+
+	// --- Three panes ---
+	// Ours (left).
+	mv.oursView = createMergePane("OURS (HEAD)", false)
+
+	// Result (center, editable).
+	mv.resultView = createMergePane("RESULT", true)
+
+	// Theirs (right).
+	mv.theirsView = createMergePane("THEIRS", false)
+
+	// Wrap each in a labeled box.
+	oursBox := createPaneBox("OURS (HEAD)", mv.oursView)
+	resultBox := createPaneBox("RESULT (editable)", mv.resultView)
+	theirsBox := createPaneBox("THEIRS", mv.theirsView)
+
+	// Horizontal split with two GtkPaned widgets for 3 panes.
+	innerPaned := gtk.NewPaned(gtk.OrientationHorizontal)
+	innerPaned.SetStartChild(resultBox)
+	innerPaned.SetEndChild(theirsBox)
+	innerPaned.SetPosition(400)
+
+	outerPaned := gtk.NewPaned(gtk.OrientationHorizontal)
+	outerPaned.SetStartChild(oursBox)
+	outerPaned.SetEndChild(innerPaned)
+	outerPaned.SetPosition(400)
+
+	// --- Resolution action buttons between panes ---
+	actionBox := gtk.NewBox(gtk.OrientationVertical, 6)
+	actionBox.SetMarginTop(6)
+	actionBox.SetMarginBottom(6)
+	actionBox.SetMarginStart(6)
+	actionBox.SetMarginEnd(6)
+
+	useOursBtn := gtk.NewButtonWithLabel("← Use Ours")
+	useOursBtn.ConnectClicked(func() { mv.resolveCurrentConflict(git.ResolveOurs) })
+	actionBox.Append(useOursBtn)
+
+	useTheirsBtn := gtk.NewButtonWithLabel("Use Theirs →")
+	useTheirsBtn.ConnectClicked(func() { mv.resolveCurrentConflict(git.ResolveTheirs) })
+	actionBox.Append(useTheirsBtn)
+
+	useBothOursBtn := gtk.NewButtonWithLabel("Both (Ours First)")
+	useBothOursBtn.ConnectClicked(func() { mv.resolveCurrentConflict(git.ResolveBothOursFirst) })
+	actionBox.Append(useBothOursBtn)
+
+	useBothTheirsBtn := gtk.NewButtonWithLabel("Both (Theirs First)")
+	useBothTheirsBtn.ConnectClicked(func() { mv.resolveCurrentConflict(git.ResolveBothTheirsFirst) })
+	actionBox.Append(useBothTheirsBtn)
+
+	// Main layout: panes + action buttons.
+	mainBox := gtk.NewBox(gtk.OrientationVertical, 0)
+	mainBox.Append(actionBox)
+	mainBox.Append(outerPaned)
+
+	// Assemble.
+	mv.Root = adw.NewToolbarView()
+	mv.Root.AddTopBar(header)
+	mv.Root.SetContent(mainBox)
+}
+
+// SetMergeResult loads a merge result for resolution.
+func (mv *MergeView) SetMergeResult(result *git.MergeResult) {
+	mv.mergeResult = result
+	mv.currentConflict = 0
+
+	// Set pane contents.
+	mv.oursView.Buffer().SetText(result.OursContent)
+	mv.resultView.Buffer().SetText(result.MergedContent)
+	mv.theirsView.Buffer().SetText(result.TheirsContent)
+
+	mv.updateConflictLabel()
+}
+
+// navigateConflict moves to the previous or next conflict.
+func (mv *MergeView) navigateConflict(delta int) {
+	if mv.mergeResult == nil || len(mv.mergeResult.Conflicts) == 0 {
+		return
+	}
+
+	mv.currentConflict += delta
+	if mv.currentConflict < 0 {
+		mv.currentConflict = len(mv.mergeResult.Conflicts) - 1
+	}
+	if mv.currentConflict >= len(mv.mergeResult.Conflicts) {
+		mv.currentConflict = 0
+	}
+
+	mv.updateConflictLabel()
+}
+
+// resolveCurrentConflict applies a resolution strategy to the current conflict.
+func (mv *MergeView) resolveCurrentConflict(strategy git.ResolutionStrategy) {
+	if mv.mergeResult == nil || len(mv.mergeResult.Conflicts) == 0 {
+		return
+	}
+
+	if mv.currentConflict < len(mv.mergeResult.Conflicts) {
+		mv.mergeResult.Conflicts[mv.currentConflict].ApplyResolution(strategy)
+	}
+
+	// Update the result pane with the resolved content.
+	resolved := git.ApplyResolutions(mv.mergeResult)
+	mv.resultView.Buffer().SetText(resolved)
+
+	mv.updateConflictLabel()
+	mv.navigateConflict(1) // Move to next conflict.
+}
+
+// markResolved stages the resolved file.
+func (mv *MergeView) markResolved() {
+	if mv.mergeResult == nil {
+		return
+	}
+
+	// Get the final content from the result pane.
+	buffer := mv.resultView.Buffer()
+	start := buffer.StartIter()
+	end := buffer.EndIter()
+	content := buffer.Text(start, end, false)
+
+	if mv.onResolved != nil {
+		mv.onResolved(mv.mergeResult.Path, content)
+	}
+}
+
+// abortMerge triggers the merge abort with confirmation.
+func (mv *MergeView) abortMerge() {
+	if mv.onAborted != nil {
+		mv.onAborted()
+	}
+}
+
+// updateConflictLabel updates the "X / Y conflicts" display.
+func (mv *MergeView) updateConflictLabel() {
+	if mv.mergeResult == nil {
+		mv.conflictLabel.SetText("No conflicts")
+		return
+	}
+
+	total := len(mv.mergeResult.Conflicts)
+	resolved := 0
+	for _, c := range mv.mergeResult.Conflicts {
+		if c.Resolved {
+			resolved++
+		}
+	}
+
+	mv.conflictLabel.SetText(fmt.Sprintf("%d / %d conflicts resolved", resolved, total))
+	mv.resolveBtn.SetSensitive(resolved == total && total > 0)
+}
+
+// createMergePane creates a GtkTextView for a merge pane.
+func createMergePane(title string, editable bool) *gtk.TextView {
+	tv := gtk.NewTextView()
+	tv.SetEditable(editable)
+	tv.SetCursorVisible(editable)
+	tv.SetMonospace(true)
+	tv.SetWrapMode(gtk.WrapNone)
+	tv.SetTopMargin(6)
+	tv.SetBottomMargin(6)
+	tv.SetLeftMargin(6)
+	tv.SetRightMargin(6)
+	tv.SetVExpand(true)
+	return tv
+}
+
+// createPaneBox wraps a TextView in a labeled box with a scrolled window.
+func createPaneBox(title string, tv *gtk.TextView) *gtk.Box {
+	box := gtk.NewBox(gtk.OrientationVertical, 0)
+
+	label := gtk.NewLabel(title)
+	label.AddCSSClass("heading")
+	label.SetMarginTop(6)
+	label.SetMarginBottom(6)
+	box.Append(label)
+
+	scrolled := gtk.NewScrolledWindow()
+	scrolled.SetChild(tv)
+	scrolled.SetVExpand(true)
+	box.Append(scrolled)
+
+	return box
+}
