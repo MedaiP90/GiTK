@@ -471,7 +471,7 @@ func (w *Window) onRepoSelected(repo *git.Repository) {
 	w.sidebar.CollapseRecentRepos()
 	w.commitLog.SetRepository(repo)
 	w.commitDetail.SetRepository(repo)
-	w.window.SetTitle("GiTK — " + repo.Name())
+	w.window.SetTitle(repo.Name())
 
 	// Enable view switcher buttons now that a repo is open.
 	w.logBtn.SetSensitive(true)
