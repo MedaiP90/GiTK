@@ -88,7 +88,7 @@ type Window struct {
 	logBtn       *gtk.ToggleButton
 	stagingBtn   *gtk.ToggleButton
 	stagingBadge *gtk.Label
-	stashBtn     *gtk.Button
+	stashBtn     *gtk.ToggleButton
 
 	// repo is the currently open git repository (nil if none).
 	repo *git.Repository
@@ -213,6 +213,7 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	// Staging button with change count badge.
 	w.stagingBtn = gtk.NewToggleButton()
 	w.stagingBtn.SetTooltipText("Staging Area")
+	w.stagingBtn.SetActive(false)
 	w.stagingBtn.SetSensitive(false) // Disabled until a repo is selected.
 	w.stagingBtn.SetGroup(w.logBtn) // Mutual exclusivity with log button.
 
@@ -236,9 +237,12 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	header.PackStart(w.stagingBtn)
 
 	// Stash button — opens the stash management page.
-	w.stashBtn = gtk.NewButtonFromIconName("sidebar-show-symbolic")
+	w.stashBtn = gtk.NewToggleButton()
+	w.stashBtn.SetIconName("sidebar-show-symbolic")
 	w.stashBtn.SetTooltipText("Stash")
+	w.stashBtn.SetActive(false)
 	w.stashBtn.SetSensitive(false) // Disabled until a repo is selected.
+	w.stashBtn.SetGroup(w.logBtn) // Mutual exclusivity with log button.
 	w.stashBtn.ConnectClicked(func() {
 		if w.repo != nil {
 			w.switchToView("stash")
