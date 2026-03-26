@@ -135,9 +135,33 @@ func (hv *HunkView) createHunkCard(index int, hunk git.Hunk) *gtk.Frame {
 	headerLabel.SetHExpand(true)
 	headerBox.Append(headerLabel)
 
+	// Capture values for closures.
+	hunkCopy := hunk
+	filePath := hv.currentPath
+	staged := hv.isStaged
+
+	// Discard hunk button (only for unstaged files).
+	if !staged {
+		discardBtn := gtk.NewButtonWithLabel("Discard Hunk")
+		discardBtn.AddCSSClass("destructive-action")
+		discardBtn.SetVAlign(gtk.AlignCenter)
+		discardBtn.ConnectClicked(func() {
+			if hv.staging.repo == nil {
+				return
+			}
+			if err := hv.staging.repo.DiscardHunk(filePath, hunkCopy); err != nil {
+				slog.Warn("discard hunk failed", "path", filePath, "error", err)
+				hv.staging.showToast("Failed: " + err.Error())
+				return
+			}
+			hv.staging.Refresh()
+		})
+		headerBox.Append(discardBtn)
+	}
+
 	// Stage/Unstage hunk button.
 	var actionBtn *gtk.Button
-	if hv.isStaged {
+	if staged {
 		actionBtn = gtk.NewButtonWithLabel("Unstage Hunk")
 	} else {
 		actionBtn = gtk.NewButtonWithLabel("Stage Hunk")
@@ -146,9 +170,6 @@ func (hv *HunkView) createHunkCard(index int, hunk git.Hunk) *gtk.Frame {
 	actionBtn.SetVAlign(gtk.AlignCenter)
 
 	// Wire the stage/unstage hunk action.
-	hunkCopy := hunk
-	filePath := hv.currentPath
-	staged := hv.isStaged
 	actionBtn.ConnectClicked(func() {
 		if hv.staging.repo == nil {
 			return

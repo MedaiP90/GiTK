@@ -885,6 +885,30 @@ func (r *Repository) UnstageHunk(path string, hunk Hunk) error {
 	return nil
 }
 
+// DiscardHunk discards a single unstaged hunk by reversing it in the
+// worktree file content.
+func (r *Repository) DiscardHunk(path string, hunk Hunk) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	fullPath := filepath.Join(r.path, path)
+
+	worktreeContent, err := os.ReadFile(fullPath)
+	if err != nil {
+		return fmt.Errorf("discard hunk: read worktree file: %w", err)
+	}
+
+	// Reverse the hunk in the worktree content.
+	newContent := ApplyHunk(string(worktreeContent), hunk, true)
+
+	if err := os.WriteFile(fullPath, []byte(newContent), 0644); err != nil {
+		return fmt.Errorf("discard hunk: write file: %w", err)
+	}
+
+	slog.Debug("discarded hunk", "path", path)
+	return nil
+}
+
 // readIndexFileUnlocked reads a file's content from the git index.
 // The caller must hold at least a read lock.
 func (r *Repository) readIndexFileUnlocked(path string) (string, error) {

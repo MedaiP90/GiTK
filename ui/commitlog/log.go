@@ -409,12 +409,14 @@ func (cl *CommitLog) addDateColumn() {
 }
 
 // addRefsColumn adds the refs (branches/tags) column with colored pills.
+// Refs are grouped by kind (local, remote, tag) into horizontal rows,
+// then the rows are stacked vertically — at most 3 rows.
 func (cl *CommitLog) addRefsColumn() {
 	factory := gtk.NewSignalListItemFactory()
 
 	factory.ConnectSetup(func(obj *coreglib.Object) {
 		item := toCell(obj)
-		box := gtk.NewBox(gtk.OrientationVertical, 2)
+		box := gtk.NewBox(gtk.OrientationVertical, 1)
 		box.SetVAlign(gtk.AlignCenter)
 		item.SetChild(box)
 	})
@@ -423,7 +425,7 @@ func (cl *CommitLog) addRefsColumn() {
 		item := toCell(obj)
 		box := item.Child().(*gtk.Box)
 
-		// Clear existing pills.
+		// Clear existing children.
 		for child := box.FirstChild(); child != nil; child = box.FirstChild() {
 			box.Remove(child)
 		}
@@ -431,9 +433,31 @@ func (cl *CommitLog) addRefsColumn() {
 		pos := item.Position()
 		if int(pos) < len(cl.graphCommits) {
 			gc := cl.graphCommits[pos]
+
+			// Group refs by kind.
+			var locals, remotes, tags []git.GraphRef
 			for _, ref := range gc.Refs {
-				pill := createRefPill(ref)
-				box.Append(pill)
+				switch ref.Kind {
+				case git.RefLocalBranch, git.RefHEAD:
+					locals = append(locals, ref)
+				case git.RefRemoteBranch:
+					remotes = append(remotes, ref)
+				case git.RefTag:
+					tags = append(tags, ref)
+				}
+			}
+
+			// Add a horizontal row per group.
+			for _, group := range [][]git.GraphRef{locals, remotes, tags} {
+				if len(group) == 0 {
+					continue
+				}
+				row := gtk.NewBox(gtk.OrientationHorizontal, 4)
+				for _, ref := range group {
+					pill := createRefPill(ref)
+					row.Append(pill)
+				}
+				box.Append(row)
 			}
 		}
 	})

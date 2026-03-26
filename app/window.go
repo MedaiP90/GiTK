@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/MedaiP90/GiTK/config"
 	"github.com/MedaiP90/GiTK/git"
@@ -37,6 +38,7 @@ import (
 	"github.com/MedaiP90/GiTK/ui/sidebar"
 	"github.com/MedaiP90/GiTK/ui/staging"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
+	"github.com/diamondburned/gotk4/pkg/gdk/v4"
 	"github.com/diamondburned/gotk4/pkg/gio/v2"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
@@ -95,6 +97,9 @@ type Window struct {
 
 	// cfg is a reference to the app configuration for reading/writing prefs.
 	cfg *config.Config
+
+	// badgeStopCh signals the badge poll goroutine to stop.
+	badgeStopCh chan struct{}
 }
 
 // NewWindow creates the main application window with the full GNOME HIG
@@ -116,6 +121,15 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 	w.window = adw.NewApplicationWindow(&app.Application)
 	w.window.SetTitle("GiTK")
 	w.window.SetDefaultSize(1200, 800)
+
+	// --- Load custom CSS ---
+	cssProvider := gtk.NewCSSProvider()
+	cssProvider.LoadFromString(`.staging-btn-box { background: transparent; }`)
+	gtk.StyleContextAddProviderForDisplay(
+		gdk.DisplayGetDefault(),
+		cssProvider,
+		gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+	)
 
 	// --- Build the header bar ---
 	w.headerBar = w.buildHeaderBar()
@@ -219,6 +233,7 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 
 	// Use a box with icon + badge label for the staging button.
 	stagingBtnBox := gtk.NewBox(gtk.OrientationHorizontal, 4)
+	stagingBtnBox.AddCSSClass("staging-btn-box")
 	stagingIcon := gtk.NewImageFromIconName("document-edit-symbolic")
 	stagingBtnBox.Append(stagingIcon)
 	w.stagingBadge = gtk.NewLabel("")
@@ -452,6 +467,7 @@ func (w *Window) buildContentArea() {
 	// --- Resizable sidebar/content split ---
 	// GtkPaned provides a draggable divider between sidebar and content.
 	w.splitPane = gtk.NewPaned(gtk.OrientationHorizontal)
+	w.sidebar.Root.SetSizeRequest(200, -1) // Minimum sidebar width.
 	w.splitPane.SetStartChild(w.sidebar.Root)
 	w.splitPane.SetEndChild(w.contentStack)
 	w.splitPane.SetPosition(280)
@@ -466,6 +482,11 @@ func (w *Window) buildContentArea() {
 
 // onRepoSelected is called by the sidebar when a repository is selected.
 func (w *Window) onRepoSelected(repo *git.Repository) {
+	// Stop existing badge poll.
+	if w.badgeStopCh != nil {
+		close(w.badgeStopCh)
+	}
+
 	w.repo = repo
 	w.sidebar.SetRepository(repo)
 	w.sidebar.CollapseRecentRepos()
@@ -481,7 +502,33 @@ func (w *Window) onRepoSelected(repo *git.Repository) {
 	w.switchToView("log")
 	w.ShowToast("Opened " + repo.Name())
 	w.updateStagingBadge()
+
+	// Start periodic badge polling to detect worktree changes.
+	w.badgeStopCh = make(chan struct{})
+	go w.badgePollLoop(w.badgeStopCh)
+
 	slog.Info("repository selected", "path", repo.Path())
+}
+
+// badgePollLoop periodically polls repo.Status() and updates the badge.
+// This detects external file edits that the git watcher can't see.
+func (w *Window) badgePollLoop(stopCh chan struct{}) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			if w.repo == nil {
+				return
+			}
+			glib.IdleAdd(func() {
+				w.updateStagingBadge()
+			})
+		}
+	}
 }
 
 // updateStagingBadge checks for uncommitted changes and updates
