@@ -14,7 +14,11 @@ package git
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -159,6 +163,54 @@ func (r *Repository) UnstageFile(path string) error {
 	}
 
 	slog.Debug("unstaged file", "path", path)
+	return nil
+}
+
+// DiscardFile discards unstaged changes to a file by restoring the
+// version from the index (equivalent to git checkout -- file).
+func (r *Repository) DiscardFile(path string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	fullPath := filepath.Join(r.path, path)
+
+	// Try to read the file from the index first.
+	content, err := r.readIndexFileUnlocked(path)
+	if err != nil {
+		// Not in index, try HEAD.
+		head, herr := r.repo.Head()
+		if herr != nil {
+			return fmt.Errorf("discard file: no index or HEAD: %w", err)
+		}
+		commit, cerr := r.repo.CommitObject(head.Hash())
+		if cerr != nil {
+			return fmt.Errorf("discard file: get HEAD commit: %w", cerr)
+		}
+		tree, terr := commit.Tree()
+		if terr != nil {
+			return fmt.Errorf("discard file: get tree: %w", terr)
+		}
+		file, ferr := tree.File(path)
+		if ferr != nil {
+			// File doesn't exist in HEAD — it's untracked. Delete it.
+			if removeErr := os.Remove(fullPath); removeErr != nil {
+				return fmt.Errorf("discard untracked file %q: %w", path, removeErr)
+			}
+			slog.Debug("discarded untracked file", "path", path)
+			return nil
+		}
+		content, err = file.Contents()
+		if err != nil {
+			return fmt.Errorf("discard file: read HEAD content: %w", err)
+		}
+	}
+
+	// Write the index/HEAD content to the working tree.
+	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("discard file %q: write: %w", path, err)
+	}
+
+	slog.Debug("discarded file", "path", path)
 	return nil
 }
 
@@ -732,6 +784,212 @@ func (r *Repository) RemoveRemote(name string) error {
 
 	slog.Info("remote removed", "name", name)
 	return nil
+}
+
+// StageHunk stages a single hunk of a file by temporarily swapping the
+// worktree file content, staging it, and restoring the original content.
+func (r *Repository) StageHunk(path string, hunk Hunk) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	wt, err := r.repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("stage hunk: get worktree: %w", err)
+	}
+
+	fullPath := filepath.Join(r.path, path)
+
+	// Save current worktree content.
+	worktreeContent, err := os.ReadFile(fullPath)
+	if err != nil {
+		return fmt.Errorf("stage hunk: read worktree file: %w", err)
+	}
+
+	// Read current index content (what's already staged for this file).
+	indexContent, err := r.readIndexFileUnlocked(path)
+	if err != nil {
+		// File not in index yet — start from empty.
+		indexContent = ""
+	}
+
+	// Apply the hunk forward to the index content.
+	newContent := ApplyHunk(indexContent, hunk, false)
+
+	// Write new content to worktree temporarily.
+	if err := os.WriteFile(fullPath, []byte(newContent), 0644); err != nil {
+		return fmt.Errorf("stage hunk: write temp content: %w", err)
+	}
+
+	// Stage the file.
+	_, addErr := wt.Add(path)
+
+	// Restore worktree content regardless of staging result.
+	if restoreErr := os.WriteFile(fullPath, worktreeContent, 0644); restoreErr != nil {
+		slog.Warn("stage hunk: failed to restore worktree file", "path", path, "error", restoreErr)
+	}
+
+	if addErr != nil {
+		return fmt.Errorf("stage hunk: add to index: %w", addErr)
+	}
+
+	slog.Debug("staged hunk", "path", path)
+	return nil
+}
+
+// UnstageHunk unstages a single hunk of a file by reversing the hunk
+// in the index content.
+func (r *Repository) UnstageHunk(path string, hunk Hunk) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	wt, err := r.repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("unstage hunk: get worktree: %w", err)
+	}
+
+	fullPath := filepath.Join(r.path, path)
+
+	// Save current worktree content.
+	worktreeContent, err := os.ReadFile(fullPath)
+	if err != nil {
+		return fmt.Errorf("unstage hunk: read worktree file: %w", err)
+	}
+
+	// Read current index content.
+	indexContent, err := r.readIndexFileUnlocked(path)
+	if err != nil {
+		return fmt.Errorf("unstage hunk: read index file: %w", err)
+	}
+
+	// Apply the hunk in reverse to remove it from the index.
+	newContent := ApplyHunk(indexContent, hunk, true)
+
+	// Write new content to worktree temporarily.
+	if err := os.WriteFile(fullPath, []byte(newContent), 0644); err != nil {
+		return fmt.Errorf("unstage hunk: write temp content: %w", err)
+	}
+
+	// Stage the file (updates the index to match the new content).
+	_, addErr := wt.Add(path)
+
+	// Restore worktree content.
+	if restoreErr := os.WriteFile(fullPath, worktreeContent, 0644); restoreErr != nil {
+		slog.Warn("unstage hunk: failed to restore worktree file", "path", path, "error", restoreErr)
+	}
+
+	if addErr != nil {
+		return fmt.Errorf("unstage hunk: add to index: %w", addErr)
+	}
+
+	slog.Debug("unstaged hunk", "path", path)
+	return nil
+}
+
+// readIndexFileUnlocked reads a file's content from the git index.
+// The caller must hold at least a read lock.
+func (r *Repository) readIndexFileUnlocked(path string) (string, error) {
+	idx, err := r.repo.Storer.Index()
+	if err != nil {
+		return "", fmt.Errorf("read index: %w", err)
+	}
+
+	for _, entry := range idx.Entries {
+		if entry.Name == path {
+			blob, err := r.repo.BlobObject(entry.Hash)
+			if err != nil {
+				return "", fmt.Errorf("read blob %s: %w", entry.Hash, err)
+			}
+			reader, err := blob.Reader()
+			if err != nil {
+				return "", fmt.Errorf("open blob reader: %w", err)
+			}
+			data, err := io.ReadAll(reader)
+			reader.Close()
+			if err != nil {
+				return "", fmt.Errorf("read blob data: %w", err)
+			}
+			return string(data), nil
+		}
+	}
+
+	return "", fmt.Errorf("file %q not found in index", path)
+}
+
+// ApplyHunk applies or reverses a single hunk on the given content.
+// When reverse is false, it applies the hunk (adds additions, removes deletions).
+// When reverse is true, it reverses the hunk (removes additions, restores deletions).
+func ApplyHunk(content string, hunk Hunk, reverse bool) string {
+	lines := strings.Split(content, "\n")
+
+	// Handle trailing newline.
+	hasTrailingNewline := len(content) > 0 && content[len(content)-1] == '\n'
+	if hasTrailingNewline && len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	// Determine start position in the current content (0-indexed).
+	var startLine int
+	if reverse {
+		startLine = hunk.NewStart - 1
+	} else {
+		startLine = hunk.OldStart - 1
+	}
+	if startLine < 0 {
+		startLine = 0
+	}
+
+	var result []string
+
+	// Copy lines before the hunk.
+	for i := 0; i < startLine && i < len(lines); i++ {
+		result = append(result, lines[i])
+	}
+
+	// Apply hunk lines.
+	idx := startLine
+	for _, dl := range hunk.Lines {
+		if reverse {
+			switch dl.Type {
+			case DiffLineContext:
+				if idx < len(lines) {
+					result = append(result, lines[idx])
+					idx++
+				}
+			case DiffLineAdd:
+				// In reverse: added lines are in the current content — skip.
+				idx++
+			case DiffLineDelete:
+				// In reverse: deleted lines need to be restored.
+				result = append(result, dl.Content)
+			}
+		} else {
+			switch dl.Type {
+			case DiffLineContext:
+				if idx < len(lines) {
+					result = append(result, lines[idx])
+					idx++
+				}
+			case DiffLineDelete:
+				// Forward: skip deleted lines from old content.
+				idx++
+			case DiffLineAdd:
+				// Forward: insert new lines.
+				result = append(result, dl.Content)
+			}
+		}
+	}
+
+	// Copy remaining lines after the hunk.
+	for i := idx; i < len(lines); i++ {
+		result = append(result, lines[i])
+	}
+
+	resultStr := strings.Join(result, "\n")
+	if hasTrailingNewline || len(resultStr) > 0 {
+		resultStr += "\n"
+	}
+
+	return resultStr
 }
 
 // StashInfo holds information about a stash entry.

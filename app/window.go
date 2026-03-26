@@ -24,6 +24,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -57,9 +58,8 @@ type Window struct {
 	// non-blocking toast notifications (e.g., "Pushed to origin/main").
 	toastOverlay *adw.ToastOverlay
 
-	// splitView is the sidebar/content split. On narrow screens, libadwaita
-	// automatically collapses the sidebar into a navigation stack.
-	splitView *adw.NavigationSplitView
+	// splitPane is the sidebar/content split using a resizable pane.
+	splitPane *gtk.Paned
 
 	// contentStack switches between different views in the main content
 	// area: commit log, staging area, graph view, etc.
@@ -85,9 +85,10 @@ type Window struct {
 
 	// logBtn and stagingBtn are header bar toggle buttons, kept as fields
 	// so we can update their active state and add badges.
-	logBtn     *gtk.ToggleButton
-	stagingBtn *gtk.ToggleButton
-	stashBtn   *gtk.Button
+	logBtn       *gtk.ToggleButton
+	stagingBtn   *gtk.ToggleButton
+	stagingBadge *gtk.Label
+	stashBtn     *gtk.Button
 
 	// repo is the currently open git repository (nil if none).
 	repo *git.Repository
@@ -207,10 +208,22 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	header.PackStart(w.logBtn)
 
 	// Staging button with badge support.
+	// Staging button with change count badge.
 	w.stagingBtn = gtk.NewToggleButton()
-	w.stagingBtn.SetIconName("document-edit-symbolic")
 	w.stagingBtn.SetTooltipText("Staging Area")
 	w.stagingBtn.SetSensitive(false) // Disabled until a repo is selected.
+
+	// Use a box with icon + badge label for the staging button.
+	stagingBtnBox := gtk.NewBox(gtk.OrientationHorizontal, 4)
+	stagingIcon := gtk.NewImageFromIconName("document-edit-symbolic")
+	stagingBtnBox.Append(stagingIcon)
+	w.stagingBadge = gtk.NewLabel("")
+	w.stagingBadge.AddCSSClass("accent")
+	w.stagingBadge.AddCSSClass("caption")
+	w.stagingBadge.SetVisible(false)
+	stagingBtnBox.Append(w.stagingBadge)
+	w.stagingBtn.SetChild(stagingBtnBox)
+
 	w.stagingBtn.ConnectClicked(func() {
 		if w.repo != nil {
 			w.stagingView.SetRepository(w.repo)
@@ -219,14 +232,14 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	})
 	header.PackStart(w.stagingBtn)
 
-	// Stash button — opens the stash management dialog.
+	// Stash button — opens the stash management page.
 	w.stashBtn = gtk.NewButtonFromIconName("sidebar-show-symbolic")
 	w.stashBtn.SetTooltipText("Stash")
 	w.stashBtn.SetSensitive(false) // Disabled until a repo is selected.
 	w.stashBtn.ConnectClicked(func() {
-		dialogs.ShowStashDialog(w.window, func(msg string) {
-			w.ShowToast(msg)
-		})
+		if w.repo != nil {
+			w.switchToView("stash")
+		}
 	})
 	header.PackStart(w.stashBtn)
 
@@ -301,107 +314,26 @@ func (w *Window) buildPrimaryMenu() *gtk.MenuButton {
 	// declaratively — each item references a GAction by name.
 	menu := newMenu()
 
-	// Section 1: Theme selection with custom widget placeholder.
-	themeSection := newMenu()
-	themeItem := gio.NewMenuItem("", "")
-	themeItem.SetAttributeValue("custom", glib.NewVariantString("theme"))
-	themeSection.AppendItem(themeItem)
-	menu.AppendSection("Appearance", themeSection)
-
-	// Section 2: View actions
+	// Section 1: View actions
 	viewSection := newMenu()
 	viewSection.Append("Keyboard Shortcuts", "app.shortcuts")
 	menu.AppendSection("", viewSection)
 
-	// Section 3: Application actions
+	// Section 2: Application actions
 	appSection := newMenu()
 	appSection.Append("Preferences", "app.preferences")
 	appSection.Append("About GiTK", "app.about")
 	appSection.Append("Quit", "app.quit")
 	menu.AppendSection("", appSection)
 
-	// Create the PopoverMenu from model.
-	popover := gtk.NewPopoverMenuFromModel(menu)
-
-	// Add custom theme selector widget.
-	themeWidget := w.buildThemeSelector()
-	popover.AddChild(themeWidget, "theme")
-
 	// Create the menu button with a hamburger icon.
 	menuBtn := gtk.NewMenuButton()
 	menuBtn.SetIconName("open-menu-symbolic")
-	menuBtn.SetPopover(popover)
+	menuBtn.SetMenuModel(menu)
 	menuBtn.SetTooltipText("Main Menu")
 	menuBtn.SetPrimary(true)
 
 	return menuBtn
-}
-
-// buildThemeSelector creates the GNOME-style theme selector with 3 circles.
-func (w *Window) buildThemeSelector() gtk.Widgetter {
-	box := gtk.NewBox(gtk.OrientationHorizontal, 12)
-	box.SetHAlign(gtk.AlignCenter)
-	box.SetMarginTop(8)
-	box.SetMarginBottom(8)
-	box.SetMarginStart(12)
-	box.SetMarginEnd(12)
-
-	// System theme button.
-	systemBtn := w.createThemeCircle("System", "system", "preferences-desktop-appearance-symbolic")
-	box.Append(systemBtn)
-
-	// Light theme button.
-	lightBtn := w.createThemeCircle("Light", "light", "display-brightness-symbolic")
-	box.Append(lightBtn)
-
-	// Dark theme button.
-	darkBtn := w.createThemeCircle("Dark", "dark", "weather-clear-night-symbolic")
-	box.Append(darkBtn)
-
-	return box
-}
-
-// createThemeCircle creates a single theme selector button.
-func (w *Window) createThemeCircle(label, theme, iconName string) *gtk.Box {
-	btnBox := gtk.NewBox(gtk.OrientationVertical, 4)
-	btnBox.SetHAlign(gtk.AlignCenter)
-
-	btn := gtk.NewButton()
-	btn.SetSizeRequest(56, 56)
-	btn.AddCSSClass("circular")
-
-	// Set icon.
-	icon := gtk.NewImageFromIconName(iconName)
-	icon.SetIconSize(gtk.IconSizeLarge)
-	btn.SetChild(icon)
-
-	// Style based on theme.
-	switch theme {
-	case "light":
-		btn.AddCSSClass("light-theme-btn")
-	case "dark":
-		btn.AddCSSClass("dark-theme-btn")
-	default:
-		btn.AddCSSClass("system-theme-btn")
-	}
-
-	// Highlight current theme.
-	if w.cfg.Theme == theme || (w.cfg.Theme == "" && theme == "system") {
-		btn.AddCSSClass("suggested-action")
-	}
-
-	btn.ConnectClicked(func() {
-		w.gitkApp.SetTheme(theme)
-	})
-
-	lbl := gtk.NewLabel(label)
-	lbl.AddCSSClass("caption")
-	lbl.AddCSSClass("dim-label")
-
-	btnBox.Append(btn)
-	btnBox.Append(lbl)
-
-	return btnBox
 }
 
 // newMenu is a helper that creates a new GMenu (GIO menu model).
@@ -417,8 +349,9 @@ func newMenu() *gio.Menu {
 func (w *Window) buildContentArea() {
 	// --- Sidebar ---
 	// The sidebar shows recent repositories and branch tree.
-	w.sidebar = sidebar.New(w.cfg, w.onRepoSelected, w.onBranchSelected)
-	sidebarPage := adw.NewNavigationPage(w.sidebar.Root, "Repositories")
+	w.sidebar = sidebar.New(w.cfg, w.onRepoSelected, w.onBranchSelected, func(path string) {
+		w.ShowToast("Repository removed: " + path + " (no longer exists on disk)")
+	})
 
 	// --- Content area ---
 	// The content area uses a GtkStack to switch between views:
@@ -461,8 +394,20 @@ func (w *Window) buildContentArea() {
 			w.commitLog.SetRepository(w.repo)
 		}
 		w.ShowToast("Committed " + hash[:7])
+	}, func() {
+		// Stash button in staging opens the stash dialog.
+		dialogs.ShowStashDialog(w.window, func(msg string) {
+			w.ShowToast(msg)
+		})
 	})
 	w.contentStack.AddNamed(w.stagingView.Root, "staging")
+
+	// --- Stash management page ---
+	stashPage := adw.NewStatusPage()
+	stashPage.SetTitle("Stash Management")
+	stashPage.SetDescription("Stash operations are not yet supported by the go-git backend.\nThis feature will be available in a future release.")
+	stashPage.SetIconName("sidebar-show-symbolic")
+	w.contentStack.AddNamed(stashPage, "stash")
 
 	// --- Merge view ---
 	w.mergeView = merge.New(
@@ -482,22 +427,19 @@ func (w *Window) buildContentArea() {
 	// Set the welcome page as the visible child.
 	w.contentStack.SetVisibleChildName("welcome")
 
-	contentPage := adw.NewNavigationPage(w.contentStack, "Content")
-
-	// --- NavigationSplitView ---
-	// This is the GNOME HIG way to do sidebar + content. On narrow screens
-	// (e.g., phones or narrow windows), it automatically collapses into a
-	// navigation stack where the sidebar slides away.
-	w.splitView = adw.NewNavigationSplitView()
-	w.splitView.SetSidebar(sidebarPage)
-	w.splitView.SetContent(contentPage)
-	w.splitView.SetMinSidebarWidth(200)
-	w.splitView.SetMaxSidebarWidth(400)
+	// --- Resizable sidebar/content split ---
+	// GtkPaned provides a draggable divider between sidebar and content.
+	w.splitPane = gtk.NewPaned(gtk.OrientationHorizontal)
+	w.splitPane.SetStartChild(w.sidebar.Root)
+	w.splitPane.SetEndChild(w.contentStack)
+	w.splitPane.SetPosition(280)
+	w.splitPane.SetShrinkStartChild(false)
+	w.splitPane.SetShrinkEndChild(false)
 
 	// --- Toast overlay ---
 	// Wraps everything to allow showing toast notifications.
 	w.toastOverlay = adw.NewToastOverlay()
-	w.toastOverlay.SetChild(w.splitView)
+	w.toastOverlay.SetChild(w.splitPane)
 }
 
 // onRepoSelected is called by the sidebar when a repository is selected.
@@ -521,10 +463,10 @@ func (w *Window) onRepoSelected(repo *git.Repository) {
 }
 
 // updateStagingBadge checks for uncommitted changes and updates
-// the staging button's CSS to show a visual indicator.
+// the staging button badge to show the change count.
 func (w *Window) updateStagingBadge() {
 	if w.repo == nil {
-		w.stagingBtn.RemoveCSSClass("needs-attention")
+		w.stagingBadge.SetVisible(false)
 		return
 	}
 
@@ -532,9 +474,10 @@ func (w *Window) updateStagingBadge() {
 		changes, err := w.repo.Status()
 		glib.IdleAdd(func() {
 			if err != nil || len(changes) == 0 {
-				w.stagingBtn.RemoveCSSClass("needs-attention")
+				w.stagingBadge.SetVisible(false)
 			} else {
-				w.stagingBtn.AddCSSClass("needs-attention")
+				w.stagingBadge.SetText(fmt.Sprintf("%d", len(changes)))
+				w.stagingBadge.SetVisible(true)
 			}
 		})
 	}()
@@ -593,15 +536,6 @@ func (w *Window) registerWindowActions() {
 	})
 	w.window.AddAction(tagAction)
 
-	// Theme action — takes a string parameter ("system", "light", "dark").
-	themeAction := gio.NewSimpleAction("theme", glib.NewVariantType("s"))
-	themeAction.ConnectActivate(func(param *glib.Variant) {
-		if param != nil {
-			theme := strings.Trim(param.String(), "'\"")
-			w.gitkApp.SetTheme(theme)
-		}
-	})
-	w.window.AddAction(themeAction)
 }
 
 // onOpenRepository handles the "Open Repository" action. It shows a native

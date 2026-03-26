@@ -12,7 +12,9 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 - Open local repositories via native file chooser (xdg-desktop-portal)
 - Clone remote repositories with progress tracking (auto-creates subdirectory named after the project)
 - Recent repositories list with quick access from the sidebar (auto-collapses on selection)
-- Change indicator badge on the staging button and recent repos list
+- Change indicator badge (with count) on the staging button and recent repos list
+- Deleted repositories automatically detected and removed from recents
+- Resizable sidebar with drag handle
 - Toolbar buttons disabled when no repository is selected
 - XDG-compliant JSON configuration (`~/.config/gitk/config.json`)
 
@@ -21,13 +23,15 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 - Inline graph column rendering branch/merge topology with colored lanes
 - Commit detail panel showing full metadata, message, and changed file list with +/- stats
 - Inline expandable diffs under each file in the commit detail panel with syntax-colored added/deleted/context lines
-- Right-click context menu on commits (e.g., Create Tag)
+- Actions menu button in commit detail for tag creation
+- First commit auto-selected when entering the page
 - Search filtering by message, author, or hash
 
 ### Staging Area
 - Split view: unstaged files first, then staged files, with hunk-level diff
 - Stage/unstage individual files or all at once
-- Per-hunk staging with colored diff display
+- Per-hunk staging/unstaging with colored diff display
+- Discard individual file changes
 - Commit message editor with subject line character counter (orange at 50, red at 72)
 - AI-powered commit message generation button (when enabled in Preferences)
 - Stash button for managing stashed changes
@@ -64,7 +68,7 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 ### Preferences
 - `AdwPreferencesWindow` with pages for Git identity/fetch settings and AI configuration
 - Git author name/email with per-repo override toggle
-- GNOME-style theme selector with light/dark/default circles
+- Dark mode enforced (no theme switching)
 - Settings persist to JSON config on window close
 
 ### AI Commit Message Generation (Optional)
@@ -193,8 +197,8 @@ make lint                  # go vet + staticcheck (if installed)
 1. Run the app with `make run`
 2. Click **Open** (folder icon) and select a local Git repository
 3. Browse the commit log, click commits to see details; click files to expand inline diffs
-4. Right-click a commit to create a tag
-5. Switch to **Staging** (pencil icon) to see working tree changes
+4. Use the actions menu (three dots) in commit details to create a tag
+5. Switch to **Staging** (pencil icon) to see working tree changes; try per-hunk staging
 6. Use **Push/Pull** buttons in the header bar for remote operations
 7. Open the hamburger menu for Preferences and About
 
@@ -372,7 +376,11 @@ The app ID `io.github.MedaiP90.GiTK` follows the Flathub verification format.
 - [x] Tag creation with auto-push to remote
 - [x] Inline expandable diffs in commit detail
 - [x] AI commit message button in staging area
-- [x] GNOME-style theme selector
+- [x] Per-hunk staging/unstaging
+- [x] Discard individual file changes
+- [x] Resizable sidebar with drag handle
+- [x] Staging button badge with change count
+- [x] Deleted repo detection in recents
 - [x] Preferences window
 - [x] Flatpak packaging files
 

@@ -234,6 +234,20 @@ func (c *Config) AddRecentRepository(path string) {
 	}
 }
 
+// RemoveRecentRepository removes a repository path from the recent list.
+func (c *Config) RemoveRecentRepository(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	filtered := make([]string, 0, len(c.RecentRepositories))
+	for _, p := range c.RecentRepositories {
+		if p != path {
+			filtered = append(filtered, p)
+		}
+	}
+	c.RecentRepositories = filtered
+}
+
 // GetRecentRepositories returns a copy of the recent repositories list.
 // It's safe to call from any goroutine.
 func (c *Config) GetRecentRepositories() []string {

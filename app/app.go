@@ -9,7 +9,6 @@ package app
 
 import (
 	"log/slog"
-	"strings"
 
 	"github.com/MedaiP90/GiTK/config"
 	"github.com/MedaiP90/GiTK/ui/prefs"
@@ -159,30 +158,10 @@ func (a *GiTKApp) registerActions() {
 	a.app.SetAccelsForAction("app.preferences", []string{"<Control>comma"})
 }
 
-// applyTheme sets the application color scheme based on the user's preference.
-// libadwaita's AdwStyleManager handles the actual light/dark switching and
-// follows the system accent color automatically.
+// applyTheme forces the application to use the dark color scheme.
 func (a *GiTKApp) applyTheme() {
 	sm := adw.StyleManagerGetDefault()
-	switch a.cfg.Theme {
-	case "light":
-		sm.SetColorScheme(adw.ColorSchemeForceLight)
-	case "dark":
-		sm.SetColorScheme(adw.ColorSchemeForceDark)
-	default: // "system" or empty
-		sm.SetColorScheme(adw.ColorSchemeDefault)
-	}
-}
-
-// SetTheme changes the application theme and saves the preference.
-func (a *GiTKApp) SetTheme(theme string) {
-	// Strip surrounding quotes that may come from GVariant.String() format.
-	theme = strings.Trim(theme, "'\"")
-	a.cfg.Theme = theme
-	a.applyTheme()
-	if err := a.cfg.Save(); err != nil {
-		slog.Warn("failed to save theme preference", "error", err)
-	}
+	sm.SetColorScheme(adw.ColorSchemeForceDark)
 }
 
 // showAbout creates and presents the GNOME-style About dialog using

@@ -34,6 +34,8 @@ import (
 	"github.com/MedaiP90/GiTK/git"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gdk/v4"
+	"github.com/diamondburned/gotk4/pkg/gio/v2"
+	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
 
@@ -57,9 +59,6 @@ type CommitDetail struct {
 	// authorRow shows the author name and email.
 	authorRow *adw.ActionRow
 
-	// authorLabel is a label suffix for the author to ensure visibility.
-	authorLabel *gtk.Label
-
 	// dateRow shows the commit date.
 	dateRow *adw.ActionRow
 
@@ -74,6 +73,9 @@ type CommitDetail struct {
 
 	// filesGroup is the changed files section.
 	filesGroup *adw.PreferencesGroup
+
+	// actionsBtn is the menu button for commit actions (tag creation, etc.).
+	actionsBtn *gtk.MenuButton
 
 	// contentBox is the main vertical layout box.
 	contentBox *gtk.Box
@@ -112,6 +114,19 @@ func (cd *CommitDetail) build() {
 	cd.infoGroup = adw.NewPreferencesGroup()
 	cd.infoGroup.SetTitle("Commit")
 
+	// Actions menu button in the header area — for tag creation etc.
+	actionsMenu := gio.NewMenu()
+	actionsMenu.Append("Create Tag on this Commit…", "detail.create-tag")
+
+	cd.actionsBtn = gtk.NewMenuButton()
+	cd.actionsBtn.SetIconName("view-more-symbolic")
+	cd.actionsBtn.SetMenuModel(actionsMenu)
+	cd.actionsBtn.SetTooltipText("Actions")
+	cd.actionsBtn.AddCSSClass("flat")
+	cd.actionsBtn.SetVAlign(gtk.AlignCenter)
+	cd.actionsBtn.SetVisible(false) // Hidden until a commit is selected.
+	cd.infoGroup.SetHeaderSuffix(cd.actionsBtn)
+
 	// Hash row with copy button.
 	cd.hashRow = adw.NewActionRow()
 	cd.hashRow.SetTitle("Hash")
@@ -129,15 +144,10 @@ func (cd *CommitDetail) build() {
 	cd.hashRow.SetActivatable(false)
 	cd.infoGroup.Add(cd.hashRow)
 
-	// Author row — use a label as suffix for better visibility.
+	// Author row — subtitle style, matching hash and date rows.
 	cd.authorRow = adw.NewActionRow()
 	cd.authorRow.SetTitle("Author")
 	cd.authorRow.SetActivatable(false)
-	cd.authorLabel = gtk.NewLabel("")
-	cd.authorLabel.SetXAlign(1)
-	cd.authorLabel.SetEllipsize(3) // PANGO_ELLIPSIZE_END
-	cd.authorLabel.SetSelectable(true)
-	cd.authorRow.AddSuffix(cd.authorLabel)
 	cd.infoGroup.Add(cd.authorRow)
 
 	// Date row.
@@ -179,6 +189,18 @@ func (cd *CommitDetail) build() {
 	cd.Root = gtk.NewScrolledWindow()
 	cd.Root.SetChild(cd.contentBox)
 	cd.Root.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
+
+	// Register the "detail.create-tag" action on the scrolled window.
+	tagAction := gio.NewSimpleAction("create-tag", nil)
+	tagAction.ConnectActivate(func(param *glib.Variant) {
+		if cd.commit != nil {
+			// Activate the window-level create-tag action with the commit hash.
+			cd.Root.ActivateAction("win.create-tag", glib.NewVariantString(cd.commit.Hash))
+		}
+	})
+	actionGroup := gio.NewSimpleActionGroup()
+	actionGroup.AddAction(tagAction)
+	cd.Root.InsertActionGroup("detail", actionGroup)
 }
 
 // SetRepository sets the current repository for diff computation.
@@ -195,13 +217,15 @@ func (cd *CommitDetail) SetCommit(commit git.CommitInfo) {
 	// Update info rows.
 	cd.hashRow.SetSubtitle(commit.Hash)
 
-	// Set author using both subtitle and label suffix for maximum visibility.
+	// Set author using subtitle (same style as hash and date).
 	authorText := fmt.Sprintf("%s <%s>", commit.Author, commit.AuthorEmail)
 	cd.authorRow.SetSubtitle(authorText)
-	cd.authorLabel.SetText(commit.Author)
 
 	cd.dateRow.SetSubtitle(commit.AuthorTime.Format("2006-01-02 15:04:05 -0700"))
 	cd.messageLabel.SetText(commit.Body)
+
+	// Show the actions button.
+	cd.actionsBtn.SetVisible(true)
 
 	// Update changed files.
 	cd.loadChangedFiles(commit)
@@ -475,9 +499,9 @@ func formatFileHeader(diff git.DiffResult) string {
 // Clear clears the detail view (e.g., when no commit is selected).
 func (cd *CommitDetail) Clear() {
 	cd.commit = nil
+	cd.actionsBtn.SetVisible(false)
 	cd.hashRow.SetSubtitle("")
 	cd.authorRow.SetSubtitle("")
-	cd.authorLabel.SetText("")
 	cd.dateRow.SetSubtitle("")
 	cd.messageLabel.SetText("")
 

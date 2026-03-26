@@ -24,6 +24,7 @@ package sidebar
 import (
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/MedaiP90/GiTK/config"
 	"github.com/MedaiP90/GiTK/git"
@@ -39,6 +40,10 @@ type OnRepoSelected func(repo *git.Repository)
 // OnBranchSelected is a callback type invoked when the user clicks
 // a branch in the branch tree.
 type OnBranchSelected func(branchName string, isRemote bool)
+
+// OnRepoRemoved is a callback type invoked when a recent repository
+// is found to be deleted from the filesystem and removed from the list.
+type OnRepoRemoved func(path string)
 
 // Sidebar is the left sidebar widget. It shows repositories and branches.
 type Sidebar struct {
@@ -56,6 +61,9 @@ type Sidebar struct {
 
 	// onBranchSelected is called when the user clicks a branch.
 	onBranchSelected OnBranchSelected
+
+	// onRepoRemoved is called when a repo is found to be deleted.
+	onRepoRemoved OnRepoRemoved
 
 	// recentListBox shows recently opened repositories.
 	recentListBox *gtk.ListBox
@@ -83,11 +91,12 @@ type Sidebar struct {
 //   - cfg: application configuration (for recent repositories list).
 //   - onRepoSelected: callback when a repository is selected.
 //   - onBranchSelected: callback when a branch is selected.
-func New(cfg *config.Config, onRepoSelected OnRepoSelected, onBranchSelected OnBranchSelected) *Sidebar {
+func New(cfg *config.Config, onRepoSelected OnRepoSelected, onBranchSelected OnBranchSelected, onRepoRemoved OnRepoRemoved) *Sidebar {
 	s := &Sidebar{
 		cfg:              cfg,
 		onRepoSelected:   onRepoSelected,
 		onBranchSelected: onBranchSelected,
+		onRepoRemoved:    onRepoRemoved,
 	}
 
 	s.build()
@@ -219,15 +228,17 @@ func (s *Sidebar) RefreshRecent() {
 	}
 
 	for i, path := range recents {
+		// Skip repos that no longer exist on disk.
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			continue
+		}
+
 		row := NewRepoRow(path)
-		idx := i // capture for closure
 		repoPath := path
+		_ = i // index not used directly
 		row.SetActivatable(true)
 		row.ConnectActivated(func() {
-			paths := s.cfg.GetRecentRepositories()
-			if idx < len(paths) {
-				s.openRepo(paths[idx])
-			}
+			s.openRepo(repoPath)
 		})
 
 		// Check if repo is dirty (has uncommitted changes) in background.
@@ -348,6 +359,22 @@ func (s *Sidebar) RefreshBranches() {
 
 // openRepo opens a repository at the given path and notifies the callback.
 func (s *Sidebar) openRepo(path string) {
+	// Check if the path still exists on the filesystem.
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		slog.Warn("repository no longer exists on disk", "path", path)
+		s.cfg.RemoveRecentRepository(path)
+		if err := s.cfg.Save(); err != nil {
+			slog.Warn("failed to save config", "error", err)
+		}
+		s.RefreshRecent()
+
+		// Show a notification via a temporary label.
+		if s.onRepoRemoved != nil {
+			s.onRepoRemoved(path)
+		}
+		return
+	}
+
 	repo, err := git.OpenRepository(path)
 	if err != nil {
 		slog.Warn("failed to open repository", "path", path, "error", err)

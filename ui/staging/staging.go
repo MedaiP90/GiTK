@@ -39,6 +39,10 @@ import (
 // OnCommitCreated is called when the user successfully creates a commit.
 type OnCommitCreated func(hash string)
 
+// OnStashRequested is called when the user clicks the stash button
+// in the staging area, allowing the parent to open the stash dialog.
+type OnStashRequested func()
+
 // StagingView is the staging area widget.
 type StagingView struct {
 	// Root is the top-level widget.
@@ -52,6 +56,9 @@ type StagingView struct {
 
 	// onCommitCreated is called after a successful commit.
 	onCommitCreated OnCommitCreated
+
+	// onStashRequested is called when the stash button is clicked.
+	onStashRequested OnStashRequested
 
 	// stagedListBox shows staged files.
 	stagedListBox *gtk.ListBox
@@ -92,10 +99,11 @@ type StagingView struct {
 // Parameters:
 //   - cfg: the app configuration.
 //   - onCommitCreated: callback after a successful commit.
-func New(cfg *config.Config, onCommitCreated OnCommitCreated) *StagingView {
+func New(cfg *config.Config, onCommitCreated OnCommitCreated, onStashRequested OnStashRequested) *StagingView {
 	sv := &StagingView{
-		cfg:             cfg,
-		onCommitCreated: onCommitCreated,
+		cfg:              cfg,
+		onCommitCreated:  onCommitCreated,
+		onStashRequested: onStashRequested,
 	}
 
 	sv.build()
@@ -132,11 +140,13 @@ func (sv *StagingView) build() {
 	spacer.SetHExpand(true)
 	actionBar.Append(spacer)
 
-	// Stash button.
+	// Stash button — opens the stash dialog via callback.
 	stashBtn := gtk.NewButtonFromIconName("sidebar-show-symbolic")
 	stashBtn.SetTooltipText("Stash Changes")
 	stashBtn.ConnectClicked(func() {
-		sv.showToast("Stash is not yet supported by the go-git backend")
+		if sv.onStashRequested != nil {
+			sv.onStashRequested()
+		}
 	})
 	actionBar.Append(stashBtn)
 
@@ -569,6 +579,17 @@ func (sv *StagingView) createFileRow(change git.FileChange, isStaged bool) *adw.
 		actionBtn.ConnectClicked(func() {
 			sv.stageFile(path)
 		})
+
+		// Discard button for unstaged changes.
+		discardBtn := gtk.NewButtonFromIconName("user-trash-symbolic")
+		discardBtn.SetTooltipText("Discard Changes")
+		discardBtn.AddCSSClass("destructive-action")
+		discardBtn.SetVAlign(gtk.AlignCenter)
+		discardPath := change.Path
+		discardBtn.ConnectClicked(func() {
+			sv.discardFile(discardPath)
+		})
+		row.AddSuffix(discardBtn)
 	}
 	actionBtn.SetVAlign(gtk.AlignCenter)
 	row.AddSuffix(actionBtn)
@@ -612,6 +633,23 @@ func (sv *StagingView) unstageFile(path string) {
 	}
 
 	sv.Refresh()
+}
+
+// discardFile discards unstaged changes to a single file by checking
+// it out from the index (restoring to the last staged/committed state).
+func (sv *StagingView) discardFile(path string) {
+	if sv.repo == nil {
+		return
+	}
+
+	if err := sv.repo.DiscardFile(path); err != nil {
+		slog.Warn("failed to discard file", "path", path, "error", err)
+		sv.showToast("Failed to discard " + path)
+		return
+	}
+
+	sv.Refresh()
+	sv.showToast("Discarded changes to " + path)
 }
 
 // stageAll stages all changes.

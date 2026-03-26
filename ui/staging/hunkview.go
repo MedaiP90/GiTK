@@ -23,6 +23,7 @@ package staging
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/MedaiP90/GiTK/git"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
@@ -143,6 +144,28 @@ func (hv *HunkView) createHunkCard(index int, hunk git.Hunk) *gtk.Frame {
 		actionBtn.AddCSSClass("suggested-action")
 	}
 	actionBtn.SetVAlign(gtk.AlignCenter)
+
+	// Wire the stage/unstage hunk action.
+	hunkCopy := hunk
+	filePath := hv.currentPath
+	staged := hv.isStaged
+	actionBtn.ConnectClicked(func() {
+		if hv.staging.repo == nil {
+			return
+		}
+		var err error
+		if staged {
+			err = hv.staging.repo.UnstageHunk(filePath, hunkCopy)
+		} else {
+			err = hv.staging.repo.StageHunk(filePath, hunkCopy)
+		}
+		if err != nil {
+			slog.Warn("hunk stage/unstage failed", "path", filePath, "error", err)
+			hv.staging.showToast("Failed: " + err.Error())
+			return
+		}
+		hv.staging.Refresh()
+	})
 	headerBox.Append(actionBtn)
 
 	cardBox.Append(headerBox)
