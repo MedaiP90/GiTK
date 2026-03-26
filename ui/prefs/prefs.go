@@ -36,6 +36,42 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 	win.SetTransientFor(&parent.Window)
 	win.SetModal(true)
 
+	// --- App Page ---
+	appPage := adw.NewPreferencesPage()
+	appPage.SetTitle("App")
+	appPage.SetIconName("preferences-system-symbolic")
+
+	// Refresh subsection.
+	refreshGroup := adw.NewPreferencesGroup()
+	refreshGroup.SetTitle("Refresh")
+	refreshGroup.SetDescription("Configure automatic remote fetching")
+
+	autoFetchRow := adw.NewSwitchRow()
+	autoFetchRow.SetTitle("Auto-Refresh")
+	autoFetchRow.SetSubtitle("Periodically fetch from all remotes")
+	autoFetchRow.SetActive(cfg.Git.AutoFetch)
+	refreshGroup.Add(autoFetchRow)
+
+	autoFetchIntervalRow := adw.NewEntryRow()
+	autoFetchIntervalRow.SetTitle("Fetch Interval (minutes)")
+	autoFetchIntervalRow.SetText(fmt.Sprintf("%d", cfg.Git.AutoFetchInterval))
+	refreshGroup.Add(autoFetchIntervalRow)
+
+	appPage.Add(refreshGroup)
+
+	// Recent repositories subsection.
+	recentGroup := adw.NewPreferencesGroup()
+	recentGroup.SetTitle("Recent Repositories")
+	recentGroup.SetDescription("Configure recent repositories behavior")
+
+	maxRecentRow := adw.NewEntryRow()
+	maxRecentRow.SetTitle("Maximum Recent Repositories")
+	maxRecentRow.SetText(fmt.Sprintf("%d", cfg.MaxRecent))
+	recentGroup.Add(maxRecentRow)
+
+	appPage.Add(recentGroup)
+	win.Add(appPage)
+
 	// --- Git Page ---
 	gitPage := adw.NewPreferencesPage()
 	gitPage.SetTitle("Git")
@@ -64,21 +100,9 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 
 	gitPage.Add(identityGroup)
 
-	// Fetch subsection.
+	// Fetch subsection (only prune remains here).
 	fetchGroup := adw.NewPreferencesGroup()
 	fetchGroup.SetTitle("Fetch")
-	fetchGroup.SetDescription("Configure automatic remote fetching")
-
-	autoFetchRow := adw.NewSwitchRow()
-	autoFetchRow.SetTitle("Auto-Refresh")
-	autoFetchRow.SetSubtitle("Periodically fetch from all remotes")
-	autoFetchRow.SetActive(cfg.Git.AutoFetch)
-	fetchGroup.Add(autoFetchRow)
-
-	autoFetchIntervalRow := adw.NewEntryRow()
-	autoFetchIntervalRow.SetTitle("Fetch Interval (minutes)")
-	autoFetchIntervalRow.SetText(fmt.Sprintf("%d", cfg.Git.AutoFetchInterval))
-	fetchGroup.Add(autoFetchIntervalRow)
 
 	pruneRow := adw.NewSwitchRow()
 	pruneRow.SetTitle("Prune When Fetching")
@@ -136,13 +160,19 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 	// Save settings when the window is closed.
 	win.ConnectCloseRequest(func() bool {
 		// Read values from UI and update config.
-		cfg.Git.AuthorName = nameRow.Text()
-		cfg.Git.AuthorEmail = emailRow.Text()
-		cfg.Git.PerRepoOverride = perRepoRow.Active()
+		// App settings.
 		cfg.Git.AutoFetch = autoFetchRow.Active()
 		if interval, err := strconv.Atoi(autoFetchIntervalRow.Text()); err == nil && interval > 0 {
 			cfg.Git.AutoFetchInterval = interval
 		}
+		if maxRecent, err := strconv.Atoi(maxRecentRow.Text()); err == nil && maxRecent > 0 {
+			cfg.MaxRecent = maxRecent
+		}
+
+		// Git settings.
+		cfg.Git.AuthorName = nameRow.Text()
+		cfg.Git.AuthorEmail = emailRow.Text()
+		cfg.Git.PerRepoOverride = perRepoRow.Active()
 		cfg.Git.PruneOnFetch = pruneRow.Active()
 
 		cfg.AI.Enabled = aiEnabledRow.Active()

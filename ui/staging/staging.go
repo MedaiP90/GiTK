@@ -43,6 +43,10 @@ type OnCommitCreated func(hash string)
 // in the staging area, allowing the parent to open the stash dialog.
 type OnStashRequested func()
 
+// OnChangesUpdated is called whenever the staging area detects that
+// the number of changes may have changed (after stage/unstage/discard/commit).
+type OnChangesUpdated func()
+
 // StagingView is the staging area widget.
 type StagingView struct {
 	// Root is the top-level widget.
@@ -59,6 +63,9 @@ type StagingView struct {
 
 	// onStashRequested is called when the stash button is clicked.
 	onStashRequested OnStashRequested
+
+	// onChangesUpdated is called when changes are staged/unstaged/discarded.
+	onChangesUpdated OnChangesUpdated
 
 	// stagedListBox shows staged files.
 	stagedListBox *gtk.ListBox
@@ -99,11 +106,12 @@ type StagingView struct {
 // Parameters:
 //   - cfg: the app configuration.
 //   - onCommitCreated: callback after a successful commit.
-func New(cfg *config.Config, onCommitCreated OnCommitCreated, onStashRequested OnStashRequested) *StagingView {
+func New(cfg *config.Config, onCommitCreated OnCommitCreated, onStashRequested OnStashRequested, onChangesUpdated OnChangesUpdated) *StagingView {
 	sv := &StagingView{
 		cfg:              cfg,
 		onCommitCreated:  onCommitCreated,
 		onStashRequested: onStashRequested,
+		onChangesUpdated: onChangesUpdated,
 	}
 
 	sv.build()
@@ -464,6 +472,10 @@ func (sv *StagingView) Refresh() {
 		return
 	}
 
+	// Remember what was selected so we can re-select after rebuild.
+	selectedPath := sv.hunkView.currentPath
+	selectedStaged := sv.hunkView.isStaged
+
 	// Clear existing rows.
 	clearListBox(sv.stagedListBox)
 	clearListBox(sv.unstagedListBox)
@@ -476,12 +488,16 @@ func (sv *StagingView) Refresh() {
 	}
 
 	sv.hasStagedFiles = false
+	fileStillExists := false
 
 	for _, change := range changes {
 		// Unstaged changes.
 		if change.Worktree != git.StatusUnmodified {
 			row := sv.createFileRow(change, false)
 			sv.unstagedListBox.Append(row)
+			if change.Path == selectedPath && !selectedStaged {
+				fileStillExists = true
+			}
 		}
 
 		// Staged changes.
@@ -489,10 +505,55 @@ func (sv *StagingView) Refresh() {
 			row := sv.createFileRow(change, true)
 			sv.stagedListBox.Append(row)
 			sv.hasStagedFiles = true
+			if change.Path == selectedPath && selectedStaged {
+				fileStillExists = true
+			}
 		}
 	}
 
+	// Re-show the diff for the previously selected file, or clear if gone.
+	if selectedPath != "" && fileStillExists {
+		sv.refreshHunkView(selectedPath, selectedStaged)
+	} else {
+		sv.hunkView.Clear()
+	}
+
 	sv.updateCommitButton()
+
+	// Notify the parent that changes may have been updated.
+	if sv.onChangesUpdated != nil {
+		sv.onChangesUpdated()
+	}
+}
+
+// refreshHunkView recomputes and shows the diff for the given file path.
+func (sv *StagingView) refreshHunkView(path string, isStaged bool) {
+	if sv.repo == nil {
+		return
+	}
+
+	var diffs []git.DiffResult
+	var err error
+	if isStaged {
+		diffs, err = sv.repo.DiffStaged()
+	} else {
+		diffs, err = sv.repo.DiffWorking()
+	}
+
+	if err != nil {
+		slog.Warn("failed to refresh hunk view", "path", path, "error", err)
+		sv.hunkView.Clear()
+		return
+	}
+
+	for _, diff := range diffs {
+		if diff.NewPath == path || diff.OldPath == path {
+			sv.hunkView.SetFile(path, diff, isStaged)
+			return
+		}
+	}
+
+	sv.hunkView.Clear()
 }
 
 // showDiffForSelectedRow computes and shows the diff for the selected file.

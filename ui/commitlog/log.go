@@ -253,6 +253,16 @@ func (cl *CommitLog) applyFilter(query string) {
 	cl.setCommits(filtered)
 }
 
+// RefsForCommit returns the graph refs (branches/tags) for a given commit hash.
+func (cl *CommitLog) RefsForCommit(hash string) []git.GraphRef {
+	for _, gc := range cl.graphCommits {
+		if gc.Hash == hash {
+			return gc.Refs
+		}
+	}
+	return nil
+}
+
 // toCell casts a *coreglib.Object to a *gtk.ColumnViewCell.
 // In gotk4 v0.3.2+, GtkColumnView's SignalListItemFactory callbacks
 // receive a GtkColumnViewCell (not GtkListItem). ColumnViewCell embeds
@@ -404,7 +414,8 @@ func (cl *CommitLog) addRefsColumn() {
 
 	factory.ConnectSetup(func(obj *coreglib.Object) {
 		item := toCell(obj)
-		box := gtk.NewBox(gtk.OrientationHorizontal, 4)
+		box := gtk.NewBox(gtk.OrientationVertical, 2)
+		box.SetVAlign(gtk.AlignCenter)
 		item.SetChild(box)
 	})
 

@@ -194,7 +194,9 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 
 	// --- View switcher buttons ---
 	// These toggle between the main views: Log and Staging.
-	// They are mutually exclusive — clicking one deactivates the other.
+	// They are mutually exclusive — we use regular buttons styled as flat
+	// to avoid the ToggleButton auto-toggle behavior that conflicts with
+	// our manual active state management.
 	w.logBtn = gtk.NewToggleButton()
 	w.logBtn.SetIconName("view-list-symbolic")
 	w.logBtn.SetTooltipText("Commit Log")
@@ -205,13 +207,14 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 			w.switchToView("log")
 		}
 	})
+	// Group with staging button so GTK manages mutual exclusivity.
 	header.PackStart(w.logBtn)
 
-	// Staging button with badge support.
 	// Staging button with change count badge.
 	w.stagingBtn = gtk.NewToggleButton()
 	w.stagingBtn.SetTooltipText("Staging Area")
 	w.stagingBtn.SetSensitive(false) // Disabled until a repo is selected.
+	w.stagingBtn.SetGroup(w.logBtn) // Mutual exclusivity with log button.
 
 	// Use a box with icon + badge label for the staging button.
 	stagingBtnBox := gtk.NewBox(gtk.OrientationHorizontal, 4)
@@ -303,9 +306,18 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 func (w *Window) switchToView(name string) {
 	w.contentStack.SetVisibleChildName(name)
 
-	// Update toggle button active states to match the visible view.
-	w.logBtn.SetActive(name == "log")
-	w.stagingBtn.SetActive(name == "staging")
+	// For grouped toggle buttons, setting one active automatically
+	// deactivates the other. Only set active if switching to log/staging.
+	switch name {
+	case "log":
+		w.logBtn.SetActive(true)
+	case "staging":
+		w.stagingBtn.SetActive(true)
+	default:
+		// For other views (stash, merge, etc.), deactivate both.
+		w.logBtn.SetActive(false)
+		w.stagingBtn.SetActive(false)
+	}
 }
 
 // buildPrimaryMenu creates the hamburger menu button (≡) with the app menu.
@@ -372,6 +384,9 @@ func (w *Window) buildContentArea() {
 	w.commitLog = commitlog.New(func(commit git.CommitInfo) {
 		// When a commit is selected, show its details.
 		w.commitDetail.SetCommit(commit)
+		// Show refs (branches/tags) for this commit.
+		refs := w.commitLog.RefsForCommit(commit.Hash)
+		w.commitDetail.SetRefs(refs)
 	})
 
 	// --- Commit detail panel ---
@@ -399,6 +414,9 @@ func (w *Window) buildContentArea() {
 		dialogs.ShowStashDialog(w.window, func(msg string) {
 			w.ShowToast(msg)
 		})
+	}, func() {
+		// Changes updated — refresh the badge counter.
+		w.updateStagingBadge()
 	})
 	w.contentStack.AddNamed(w.stagingView.Root, "staging")
 

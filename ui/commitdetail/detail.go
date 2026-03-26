@@ -65,6 +65,12 @@ type CommitDetail struct {
 	// messageLabel shows the full commit message.
 	messageLabel *gtk.Label
 
+	// refsBox shows branches/tags attached to the commit.
+	refsBox *gtk.Box
+
+	// refsGroup is the refs section (hidden when no refs).
+	refsGroup *adw.PreferencesGroup
+
 	// filesListBox shows the list of changed files with expandable diffs.
 	filesListBox *gtk.ListBox
 
@@ -158,6 +164,20 @@ func (cd *CommitDetail) build() {
 
 	cd.contentBox.Append(cd.infoGroup)
 
+	// --- Refs (branches/tags) section ---
+	cd.refsGroup = adw.NewPreferencesGroup()
+	cd.refsGroup.SetTitle("Refs")
+	cd.refsBox = gtk.NewBox(gtk.OrientationHorizontal, 6)
+	cd.refsBox.SetMarginTop(6)
+	cd.refsBox.SetMarginBottom(6)
+	cd.refsBox.SetMarginStart(12)
+	cd.refsBox.SetMarginEnd(12)
+	cd.refsBox.SetHExpand(true)
+	// Use a flow-like wrapping via GtkFlowBox-style approach.
+	cd.refsGroup.Add(cd.refsBox)
+	cd.refsGroup.SetVisible(false) // Hidden until a commit with refs is shown.
+	cd.contentBox.Append(cd.refsGroup)
+
 	// --- Commit message ---
 	msgGroup := adw.NewPreferencesGroup()
 	msgGroup.SetTitle("Message")
@@ -218,7 +238,8 @@ func (cd *CommitDetail) SetCommit(commit git.CommitInfo) {
 	cd.hashRow.SetSubtitle(commit.Hash)
 
 	// Set author using subtitle (same style as hash and date).
-	authorText := fmt.Sprintf("%s <%s>", commit.Author, commit.AuthorEmail)
+	// Escape angle brackets to prevent Pango markup interpretation.
+	authorText := fmt.Sprintf("%s &lt;%s&gt;", commit.Author, commit.AuthorEmail)
 	cd.authorRow.SetSubtitle(authorText)
 
 	cd.dateRow.SetSubtitle(commit.AuthorTime.Format("2006-01-02 15:04:05 -0700"))
@@ -229,6 +250,39 @@ func (cd *CommitDetail) SetCommit(commit git.CommitInfo) {
 
 	// Update changed files.
 	cd.loadChangedFiles(commit)
+}
+
+// SetRefs displays the branches and tags attached to the current commit.
+func (cd *CommitDetail) SetRefs(refs []git.GraphRef) {
+	// Clear existing pills.
+	for child := cd.refsBox.FirstChild(); child != nil; child = cd.refsBox.FirstChild() {
+		cd.refsBox.Remove(child)
+	}
+
+	if len(refs) == 0 {
+		cd.refsGroup.SetVisible(false)
+		return
+	}
+
+	for _, ref := range refs {
+		pill := gtk.NewLabel(ref.Name)
+		pill.AddCSSClass("caption")
+
+		switch ref.Kind {
+		case git.RefLocalBranch:
+			pill.AddCSSClass("accent")
+		case git.RefRemoteBranch:
+			pill.AddCSSClass("dim-label")
+		case git.RefTag:
+			pill.AddCSSClass("warning")
+		case git.RefHEAD:
+			pill.AddCSSClass("success")
+		}
+
+		cd.refsBox.Append(pill)
+	}
+
+	cd.refsGroup.SetVisible(true)
 }
 
 // loadChangedFiles computes and displays the diff for the given commit.
@@ -504,6 +558,7 @@ func (cd *CommitDetail) Clear() {
 	cd.authorRow.SetSubtitle("")
 	cd.dateRow.SetSubtitle("")
 	cd.messageLabel.SetText("")
+	cd.refsGroup.SetVisible(false)
 
 	// Clear file list.
 	for {
