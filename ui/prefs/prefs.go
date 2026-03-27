@@ -24,12 +24,11 @@ var claudeModels = []string{
 	"claude-haiku-4-5-20251001",
 }
 
-// Available OpenCode Go models.
+// Available OpenCode Go models (subscription plan, prefixed with opencode-go/).
 var openCodeModels = []string{
-	"claude-sonnet-4-5",
-	"claude-haiku-4-5",
-	"gpt-4o",
-	"gpt-4o-mini",
+	"opencode-go/kimi-k2.5",
+	"opencode-go/glm-5",
+	"opencode-go/minimax-m2.5",
 }
 
 // aiProviders lists the display names shown in the provider combo row.

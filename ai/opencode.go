@@ -19,14 +19,15 @@ import (
 const OpenCodeAPIEndpoint = "https://opencode.ai/zen/go/v1/chat/completions"
 
 // DefaultOpenCodeModel is the default model for the OpenCode Go API.
-const DefaultOpenCodeModel = "claude-sonnet-4-5"
+const DefaultOpenCodeModel = "opencode-go/kimi-k2.5"
 
-// Available OpenCode Go models.
+// OpenCodeModels lists the models available through the OpenCode Go subscription.
+// Models are prefixed with "opencode-go/" as required by the API.
+// The full list can be retrieved by running `/models` in the opencode TUI.
 var OpenCodeModels = []string{
-	"claude-sonnet-4-5",
-	"claude-haiku-4-5",
-	"gpt-4o",
-	"gpt-4o-mini",
+	"opencode-go/kimi-k2.5",
+	"opencode-go/glm-5",
+	"opencode-go/minimax-m2.5",
 }
 
 // OpenCodeClient is the AI client for the OpenCode Go subscription.
