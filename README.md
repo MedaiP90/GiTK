@@ -95,10 +95,9 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 - Settings persist to JSON config on window close
 
 ### AI Commit Message Generation (Optional)
-- **Claude (Anthropic)** — Messages API, `ANTHROPIC_API_KEY` env var, models: sonnet/opus/haiku
-- **OpenCode Go** — OpenAI-compatible endpoint at `opencode.ai/zen/go/v1`, `OPENCODE_API_KEY` env var
-- Provider selector in Preferences (switch between Claude and OpenCode Go)
-- Configurable model and optional custom system prompt
+- Two providers: **Claude (Anthropic)** and **OpenCode Go**
+- API keys configured directly in **Preferences > AI** (no environment variable required; env vars are used as a fallback)
+- Provider and model selectable per-provider in Preferences
 - Generates conventional commit messages from staged diffs
 - Enable/disable from Preferences
 
@@ -360,16 +359,33 @@ The UI adapts based on the current state (e.g., showing the merge editor when in
 
 ## AI Commit Messages (Optional)
 
-GiTK can generate commit messages using the Claude API. To enable:
+GiTK can generate commit messages using AI. Two providers are supported: **Claude (Anthropic)** and **OpenCode Go**.
 
-1. Set the `ANTHROPIC_API_KEY` environment variable:
-   ```bash
-   export ANTHROPIC_API_KEY="sk-ant-..."
-   ```
-2. Open **Preferences** > **AI** and enable "AI Features"
-3. Optionally change the model (default: `claude-sonnet-4-20250514`)
+### Setup
 
-The AI reads your staged diff and generates a conventional commit message (type, scope, description). The API key is never stored in the config file.
+1. Open **Preferences** (`Ctrl+,`) and go to the **AI** tab
+2. Toggle **Enable AI Features** on
+3. Select a **Provider** and enter your API key for that provider
+4. Optionally pick a different model
+
+The API key is stored in `~/.config/gitk/config.json` (user-owned, restricted permissions). Alternatively, the key can be supplied via environment variable — GiTK will fall back to the environment variable if the config key is empty.
+
+### Claude (Anthropic)
+
+- API key: enter in Preferences, or set `ANTHROPIC_API_KEY` in the environment
+- Models: `claude-sonnet-4-20250514` (default), `claude-opus-4-20250514`, `claude-haiku-4-5-20251001`
+- Get a key at [console.anthropic.com](https://console.anthropic.com)
+
+### OpenCode Go
+
+- API key: enter in Preferences, or set `OPENCODE_API_KEY` in the environment
+- Models: `opencode-go/kimi-k2.5` (default), `opencode-go/glm-5`, `opencode-go/minimax-m2.5`
+- Requires an [OpenCode Go subscription](https://opencode.ai/docs/go/) at opencode.ai
+- Uses an OpenAI-compatible endpoint at `https://opencode.ai/zen/go/v1/chat/completions`
+
+### How it works
+
+Clicking the ✨ button in the staging area sends your staged diff to the selected AI provider and inserts the generated [conventional commit](https://www.conventionalcommits.org/) message (type, scope, subject + optional body) into the commit message editor.
 
 ---
 
