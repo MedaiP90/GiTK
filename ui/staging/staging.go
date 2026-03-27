@@ -340,7 +340,7 @@ func (sv *StagingView) generateAICommitMessage() {
 		return
 	}
 
-	client := ai.NewClient(sv.cfg.AI.APIKey, sv.cfg.AI.Model)
+	client := ai.NewProvider(sv.cfg.AI)
 	if client == nil {
 		sv.showToast("AI not configured. Set API key in Preferences.")
 		return

@@ -98,6 +98,9 @@ type Window struct {
 	// stagingChip is the external pill label showing "N changes" next to stagingBtn.
 	stagingChip *gtk.Label
 
+	// stashChip is the external pill label showing "N stashed" next to stashBtn.
+	stashChip *gtk.Label
+
 	// repo is the currently open git repository (nil if none).
 	repo *git.Repository
 
@@ -279,7 +282,18 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 			w.switchToView("stash")
 		}
 	})
-	header.PackStart(w.stashBtn)
+
+	// External chip showing how many stash entries exist.
+	w.stashChip = gtk.NewLabel("")
+	w.stashChip.AddCSSClass("changes-chip")
+	w.stashChip.SetVisible(false)
+	w.stashChip.SetVAlign(gtk.AlignCenter)
+
+	stashWrap := gtk.NewBox(gtk.OrientationHorizontal, 4)
+	stashWrap.SetVAlign(gtk.AlignCenter)
+	stashWrap.Append(w.stashBtn)
+	stashWrap.Append(w.stashChip)
+	header.PackStart(stashWrap)
 
 	// --- Right side: Primary menu ---
 	menuBtn := w.buildPrimaryMenu()
@@ -402,10 +416,13 @@ func (w *Window) buildContentArea() {
 		OnRepoRemoved: func(path string) {
 			w.ShowToast("Repository removed: " + path + " (no longer exists on disk)")
 		},
-		OnBranchDelete: w.onBranchDelete,
-		OnTagDelete:    w.onTagDelete,
-		OnBranchMerge:  w.onBranchMerge,
-		OnAddRemote:    w.onAddRemote,
+		OnBranchDelete:    w.onBranchDelete,
+		OnTagDelete:       w.onTagDelete,
+		OnBranchMerge:     w.onBranchMerge,
+		OnAddRemote:       w.onAddRemote,
+		OnSubmoduleAdd:    w.onSubmoduleAdd,
+		OnSubmoduleRemove: w.onSubmoduleRemove,
+		OnSubmoduleUpdate: w.onSubmoduleUpdate,
 	})
 
 	// --- Content area ---
@@ -537,6 +554,7 @@ func (w *Window) onRepoSelected(repo *git.Repository) {
 	w.switchToView("log")
 	w.ShowToast("Opened " + repo.Name())
 	w.updateStagingBadge()
+	w.updateStashChip()
 
 	// Start periodic badge polling to detect worktree changes.
 	w.badgeStopCh = make(chan struct{})
@@ -561,6 +579,7 @@ func (w *Window) badgePollLoop(stopCh chan struct{}) {
 			}
 			glib.IdleAdd(func() {
 				w.updateStagingBadge()
+				w.updateStashChip()
 			})
 		}
 	}
@@ -731,6 +750,55 @@ func (w *Window) onAddRemote() {
 	})
 }
 
+// onSubmoduleAdd opens the Add Submodule dialog.
+func (w *Window) onSubmoduleAdd() {
+	if w.repo == nil {
+		return
+	}
+	dialogs.ShowAddSubmoduleDialog(w.window, w.repo, func(msg string) {
+		w.ShowToast(msg)
+		w.sidebar.RefreshBranches()
+	})
+}
+
+// onSubmoduleRemove asks for confirmation and removes a submodule.
+func (w *Window) onSubmoduleRemove(path string) {
+	if w.repo == nil {
+		return
+	}
+	dialogs.ShowRemoveSubmoduleConfirmDialog(w.window, path, func() {
+		go func() {
+			err := w.repo.RemoveSubmodule(path)
+			glib.IdleAdd(func() {
+				if err != nil {
+					w.ShowToast("Remove submodule failed: " + err.Error())
+					return
+				}
+				w.ShowToast("Submodule '" + path + "' removed")
+				w.sidebar.RefreshBranches()
+			})
+		}()
+	})
+}
+
+// onSubmoduleUpdate updates all submodules.
+func (w *Window) onSubmoduleUpdate() {
+	if w.repo == nil {
+		return
+	}
+	go func() {
+		err := w.repo.UpdateSubmodules()
+		glib.IdleAdd(func() {
+			if err != nil {
+				w.ShowToast("Update submodules failed: " + err.Error())
+				return
+			}
+			w.ShowToast("Submodules updated")
+			w.sidebar.RefreshBranches()
+		})
+	}()
+}
+
 // registerWindowActions registers GActions scoped to this window.
 // These are triggered by keyboard shortcuts or menu items.
 func (w *Window) registerWindowActions() {
@@ -760,6 +828,23 @@ func (w *Window) registerWindowActions() {
 		})
 	})
 	w.window.AddAction(tagAction)
+
+	// Create Branch action — used by commit detail action menu.
+	createBranchAction := gio.NewSimpleAction("create-branch", glib.NewVariantType("s"))
+	createBranchAction.ConnectActivate(func(param *glib.Variant) {
+		if w.repo == nil {
+			return
+		}
+		commitHash := ""
+		if param != nil {
+			commitHash = strings.Trim(param.String(), "'\"")
+		}
+		dialogs.ShowCreateBranchDialog(w.window, w.repo, commitHash, func(msg string) {
+			w.ShowToast(msg)
+			w.sidebar.RefreshBranches()
+		})
+	})
+	w.window.AddAction(createBranchAction)
 
 	// Reset Soft action — moves HEAD, keeps changes staged.
 	resetSoftAction := gio.NewSimpleAction("reset-soft", glib.NewVariantType("s"))
@@ -808,6 +893,25 @@ func (w *Window) registerWindowActions() {
 	})
 	w.window.AddAction(resetHardAction)
 
+}
+
+// updateStashChip refreshes the stash count chip in the toolbar.
+func (w *Window) updateStashChip() {
+	if w.repo == nil {
+		w.stashChip.SetVisible(false)
+		return
+	}
+	go func() {
+		stashes, err := w.repo.StashList()
+		glib.IdleAdd(func() {
+			if err != nil || len(stashes) == 0 {
+				w.stashChip.SetVisible(false)
+			} else {
+				w.stashChip.SetText(fmt.Sprintf("%d stashed", len(stashes)))
+				w.stashChip.SetVisible(true)
+			}
+		})
+	}()
 }
 
 // doReset performs a git reset to the given commit hash with the specified mode.

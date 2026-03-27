@@ -24,6 +24,20 @@ var claudeModels = []string{
 	"claude-haiku-4-5-20251001",
 }
 
+// Available OpenCode Go models.
+var openCodeModels = []string{
+	"claude-sonnet-4-5",
+	"claude-haiku-4-5",
+	"gpt-4o",
+	"gpt-4o-mini",
+}
+
+// aiProviders lists the display names shown in the provider combo row.
+var aiProviders = []string{"Claude (Anthropic)", "OpenCode Go"}
+
+// aiProviderKeys maps display-name index → config key.
+var aiProviderKeys = []string{"claude", "opencode"}
+
 // Show creates and presents the preferences window.
 //
 // Parameters:
@@ -119,42 +133,83 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 	aiPage.SetIconName("applications-science-symbolic")
 
 	aiGroup := adw.NewPreferencesGroup()
-	aiGroup.SetTitle("Claude AI Integration")
-	aiGroup.SetDescription("Generate commit messages using Claude AI")
+	aiGroup.SetTitle("AI Integration")
+	aiGroup.SetDescription("Generate commit messages using AI")
 
 	aiEnabledRow := adw.NewSwitchRow()
 	aiEnabledRow.SetTitle("Enable AI Features")
 	aiEnabledRow.SetActive(cfg.AI.Enabled)
 	aiGroup.Add(aiEnabledRow)
 
-	// API key entry (password-style).
-	apiKeyRow := adw.NewPasswordEntryRow()
-	apiKeyRow.SetTitle("API Key")
-	if cfg.AI.APIKey != "" {
-		apiKeyRow.SetText(cfg.AI.APIKey)
-	}
-	aiGroup.Add(apiKeyRow)
-
-	// Model selection as a combo row (dropdown).
-	modelRow := adw.NewComboRow()
-	modelRow.SetTitle("Model")
-	modelRow.SetSubtitle("Select the Claude model for commit message generation")
-
-	// Build a string list for the combo row.
-	modelList := gtk.NewStringList(claudeModels)
-	modelRow.SetModel(modelList)
-
-	// Set the active model based on config.
-	for i, m := range claudeModels {
-		if m == cfg.AI.Model {
-			modelRow.SetSelected(uint(i))
+	// Provider selection.
+	providerRow := adw.NewComboRow()
+	providerRow.SetTitle("Provider")
+	providerRow.SetSubtitle("Select the AI provider")
+	providerList := gtk.NewStringList(aiProviders)
+	providerRow.SetModel(providerList)
+	selectedProvider := 0
+	for i, key := range aiProviderKeys {
+		if key == cfg.AI.Provider {
+			selectedProvider = i
 			break
 		}
 	}
-
-	aiGroup.Add(modelRow)
+	providerRow.SetSelected(uint(selectedProvider))
+	aiGroup.Add(providerRow)
 
 	aiPage.Add(aiGroup)
+
+	// Claude settings group.
+	claudeGroup := adw.NewPreferencesGroup()
+	claudeGroup.SetTitle("Claude (Anthropic)")
+
+	apiKeyRow := adw.NewPasswordEntryRow()
+	apiKeyRow.SetTitle("Anthropic API Key")
+	if cfg.AI.APIKey != "" {
+		apiKeyRow.SetText(cfg.AI.APIKey)
+	}
+	claudeGroup.Add(apiKeyRow)
+
+	claudeModelRow := adw.NewComboRow()
+	claudeModelRow.SetTitle("Model")
+	claudeModelList := gtk.NewStringList(claudeModels)
+	claudeModelRow.SetModel(claudeModelList)
+	for i, m := range claudeModels {
+		if m == cfg.AI.Model {
+			claudeModelRow.SetSelected(uint(i))
+			break
+		}
+	}
+	claudeGroup.Add(claudeModelRow)
+	aiPage.Add(claudeGroup)
+
+	// OpenCode settings group.
+	openCodeGroup := adw.NewPreferencesGroup()
+	openCodeGroup.SetTitle("OpenCode Go")
+	openCodeGroup.SetDescription("OpenCode Go subscription — opencode.ai/zen/go")
+
+	openCodeKeyRow := adw.NewPasswordEntryRow()
+	openCodeKeyRow.SetTitle("OpenCode API Key")
+	if cfg.AI.OpenCodeAPIKey != "" {
+		openCodeKeyRow.SetText(cfg.AI.OpenCodeAPIKey)
+	}
+	openCodeGroup.Add(openCodeKeyRow)
+
+	openCodeModelRow := adw.NewComboRow()
+	openCodeModelRow.SetTitle("Model")
+	openCodeModelList := gtk.NewStringList(openCodeModels)
+	openCodeModelRow.SetModel(openCodeModelList)
+	selectedOCModel := 0
+	for i, m := range openCodeModels {
+		if m == cfg.AI.OpenCodeModel {
+			selectedOCModel = i
+			break
+		}
+	}
+	openCodeModelRow.SetSelected(uint(selectedOCModel))
+	openCodeGroup.Add(openCodeModelRow)
+	aiPage.Add(openCodeGroup)
+
 	win.Add(aiPage)
 
 	// Save settings when the window is closed.
@@ -176,12 +231,25 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 		cfg.Git.PruneOnFetch = pruneRow.Active()
 
 		cfg.AI.Enabled = aiEnabledRow.Active()
-		cfg.AI.APIKey = apiKeyRow.Text()
 
-		// Read selected model from combo row.
-		selectedIdx := modelRow.Selected()
-		if int(selectedIdx) < len(claudeModels) {
-			cfg.AI.Model = claudeModels[selectedIdx]
+		// Provider.
+		pIdx := providerRow.Selected()
+		if int(pIdx) < len(aiProviderKeys) {
+			cfg.AI.Provider = aiProviderKeys[pIdx]
+		}
+
+		// Claude settings.
+		cfg.AI.APIKey = apiKeyRow.Text()
+		claudeIdx := claudeModelRow.Selected()
+		if int(claudeIdx) < len(claudeModels) {
+			cfg.AI.Model = claudeModels[claudeIdx]
+		}
+
+		// OpenCode settings.
+		cfg.AI.OpenCodeAPIKey = openCodeKeyRow.Text()
+		ocIdx := openCodeModelRow.Selected()
+		if int(ocIdx) < len(openCodeModels) {
+			cfg.AI.OpenCodeModel = openCodeModels[ocIdx]
 		}
 
 		if err := cfg.Save(); err != nil {

@@ -57,6 +57,15 @@ type OnBranchMerge func(branchName string)
 // OnAddRemote is a callback invoked when the user wants to add a new remote.
 type OnAddRemote func()
 
+// OnSubmoduleAdd is a callback invoked when the user wants to add a new submodule.
+type OnSubmoduleAdd func()
+
+// OnSubmoduleRemove is a callback invoked when the user wants to remove a submodule.
+type OnSubmoduleRemove func(path string)
+
+// OnSubmoduleUpdate is a callback invoked when the user wants to update all submodules.
+type OnSubmoduleUpdate func()
+
 // Sidebar is the left sidebar widget. It shows repositories and branches.
 type Sidebar struct {
 	// Root is the top-level widget to embed in the NavigationSplitView.
@@ -89,6 +98,15 @@ type Sidebar struct {
 	// onAddRemote is called when the user wants to add a new remote.
 	onAddRemote OnAddRemote
 
+	// onSubmoduleAdd is called when the user wants to add a new submodule.
+	onSubmoduleAdd OnSubmoduleAdd
+
+	// onSubmoduleRemove is called when the user wants to remove a submodule.
+	onSubmoduleRemove OnSubmoduleRemove
+
+	// onSubmoduleUpdate is called when the user wants to update all submodules.
+	onSubmoduleUpdate OnSubmoduleUpdate
+
 	// recentListBox shows recently opened repositories.
 	recentListBox *gtk.ListBox
 
@@ -117,25 +135,31 @@ type Sidebar struct {
 //   - onBranchSelected: callback when a branch is selected.
 // SidebarCallbacks groups all optional action callbacks for the sidebar.
 type SidebarCallbacks struct {
-	OnRepoSelected  OnRepoSelected
+	OnRepoSelected   OnRepoSelected
 	OnBranchSelected OnBranchSelected
-	OnRepoRemoved   OnRepoRemoved
-	OnBranchDelete  OnBranchDelete
-	OnTagDelete     OnTagDelete
-	OnBranchMerge   OnBranchMerge
-	OnAddRemote     OnAddRemote
+	OnRepoRemoved    OnRepoRemoved
+	OnBranchDelete   OnBranchDelete
+	OnTagDelete      OnTagDelete
+	OnBranchMerge    OnBranchMerge
+	OnAddRemote      OnAddRemote
+	OnSubmoduleAdd   OnSubmoduleAdd
+	OnSubmoduleRemove OnSubmoduleRemove
+	OnSubmoduleUpdate OnSubmoduleUpdate
 }
 
 func New(cfg *config.Config, cb SidebarCallbacks) *Sidebar {
 	s := &Sidebar{
-		cfg:              cfg,
-		onRepoSelected:   cb.OnRepoSelected,
-		onBranchSelected: cb.OnBranchSelected,
-		onRepoRemoved:    cb.OnRepoRemoved,
-		onBranchDelete:   cb.OnBranchDelete,
-		onTagDelete:      cb.OnTagDelete,
-		onBranchMerge:    cb.OnBranchMerge,
-		onAddRemote:      cb.OnAddRemote,
+		cfg:               cfg,
+		onRepoSelected:    cb.OnRepoSelected,
+		onBranchSelected:  cb.OnBranchSelected,
+		onRepoRemoved:     cb.OnRepoRemoved,
+		onBranchDelete:    cb.OnBranchDelete,
+		onTagDelete:       cb.OnTagDelete,
+		onBranchMerge:     cb.OnBranchMerge,
+		onAddRemote:       cb.OnAddRemote,
+		onSubmoduleAdd:    cb.OnSubmoduleAdd,
+		onSubmoduleRemove: cb.OnSubmoduleRemove,
+		onSubmoduleUpdate: cb.OnSubmoduleUpdate,
 	}
 
 	s.build()
@@ -429,6 +453,71 @@ func (s *Sidebar) RefreshBranches() {
 
 	tagsExpander.SetSubtitle(formatCount(len(tags)))
 	s.branchListBox.Append(tagsExpander)
+
+	// Load submodules (between tags and remotes).
+	submodules, err := s.repo.Submodules()
+	if err != nil {
+		slog.Warn("failed to load submodules", "error", err)
+	}
+
+	submodulesExpander := adw.NewExpanderRow()
+	submodulesExpander.SetTitle("Submodules")
+	submodulesExpander.SetIconName("package-x-generic-symbolic")
+	submodulesExpander.SetExpanded(false)
+	submodulesExpander.SetSubtitle(formatCount(len(submodules)))
+
+	// "Update All" button.
+	updateSubmodulesBtn := gtk.NewButtonFromIconName("view-refresh-symbolic")
+	updateSubmodulesBtn.SetTooltipText("Update All Submodules")
+	updateSubmodulesBtn.AddCSSClass("flat")
+	updateSubmodulesBtn.SetVAlign(gtk.AlignCenter)
+	updateSubmodulesBtn.ConnectClicked(func() {
+		if s.onSubmoduleUpdate != nil {
+			s.onSubmoduleUpdate()
+		}
+	})
+	submodulesExpander.AddSuffix(updateSubmodulesBtn)
+
+	// "Add Submodule" button.
+	addSubmoduleBtn := gtk.NewButtonFromIconName("list-add-symbolic")
+	addSubmoduleBtn.SetTooltipText("Add Submodule")
+	addSubmoduleBtn.AddCSSClass("flat")
+	addSubmoduleBtn.SetVAlign(gtk.AlignCenter)
+	addSubmoduleBtn.ConnectClicked(func() {
+		if s.onSubmoduleAdd != nil {
+			s.onSubmoduleAdd()
+		}
+	})
+	submodulesExpander.AddSuffix(addSubmoduleBtn)
+
+	for _, sm := range submodules {
+		smPath := sm.Path
+		smRow := adw.NewActionRow()
+		smRow.SetTitle(sm.Name)
+		subtitle := sm.Path
+		if sm.URL != "" {
+			subtitle = sm.Path + " — " + sm.URL
+		}
+		smRow.SetSubtitle(subtitle)
+		smRow.SetIconName("package-x-generic-symbolic")
+
+		// Remove button.
+		removeBtn := gtk.NewButtonFromIconName("edit-delete-symbolic")
+		removeBtn.SetTooltipText("Remove Submodule")
+		removeBtn.AddCSSClass("flat")
+		removeBtn.AddCSSClass("error")
+		removeBtn.SetVAlign(gtk.AlignCenter)
+		removeBtn.ConnectClicked(func() {
+			if s.onSubmoduleRemove != nil {
+				s.onSubmoduleRemove(smPath)
+			}
+		})
+		smRow.AddSuffix(removeBtn)
+
+		submodulesExpander.AddRow(smRow)
+	}
+
+	s.branchListBox.Append(submodulesExpander)
 
 	// Load remotes.
 	remotes, err := s.repo.Remotes()

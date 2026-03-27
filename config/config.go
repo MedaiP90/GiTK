@@ -96,13 +96,23 @@ type AIConfig struct {
 	// Enabled controls whether AI features are available in the UI.
 	Enabled bool `json:"enabled"`
 
+	// Provider selects the AI backend: "claude" (Anthropic) or "opencode"
+	// (OpenCode Go). Defaults to "claude".
+	Provider string `json:"provider,omitempty"`
+
 	// APIKey is the Anthropic API key for Claude AI.
 	// Note: Storing API keys in config is acceptable for desktop apps
 	// where the config file is user-owned and has restricted permissions.
 	APIKey string `json:"api_key,omitempty"`
 
+	// OpenCodeAPIKey is the API key for the OpenCode Go subscription.
+	OpenCodeAPIKey string `json:"opencode_api_key,omitempty"`
+
 	// Model is the Claude model to use (e.g., "claude-sonnet-4-20250514").
 	Model string `json:"model"`
+
+	// OpenCodeModel is the model to use with the OpenCode Go API.
+	OpenCodeModel string `json:"opencode_model,omitempty"`
 
 	// SystemPrompt is an optional custom system prompt for commit message
 	// generation. If empty, the default prompt is used.

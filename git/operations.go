@@ -1129,3 +1129,120 @@ func (r *Repository) StashDrop(index int) error {
 	slog.Info("stash dropped", "index", index)
 	return nil
 }
+
+// SubmoduleInfo holds information about a git submodule.
+type SubmoduleInfo struct {
+	// Name is the submodule name (usually the path).
+	Name string
+
+	// Path is the submodule path relative to the repository root.
+	Path string
+
+	// URL is the remote URL of the submodule.
+	URL string
+
+	// Hash is the currently checked-out commit hash in the submodule.
+	Hash string
+}
+
+// Submodules returns information about all submodules in the repository.
+func (r *Repository) Submodules() ([]SubmoduleInfo, error) {
+	cmd := exec.Command("git", "submodule", "status")
+	cmd.Dir = r.path
+	out, err := cmd.Output()
+	if err != nil {
+		// Not an error if there are simply no submodules.
+		return nil, nil
+	}
+
+	// Parse the URL for each submodule from .gitmodules via config.
+	urlCmd := exec.Command("git", "config", "--file", ".gitmodules", "--get-regexp", "submodule\\..*\\.url")
+	urlCmd.Dir = r.path
+	urlOut, _ := urlCmd.Output()
+	urlMap := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(urlOut)), "\n") {
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) == 2 {
+			// key: "submodule.<name>.url"
+			key := parts[0]
+			url := parts[1]
+			// Extract <name> from key.
+			keyParts := strings.Split(key, ".")
+			if len(keyParts) >= 3 {
+				name := strings.Join(keyParts[1:len(keyParts)-1], ".")
+				urlMap[name] = url
+			}
+		}
+	}
+
+	var submodules []SubmoduleInfo
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		// Format: [ +-U]<hash> <path> [(<describe>)]
+		line = strings.TrimLeft(line, " +-U")
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		hash := parts[0]
+		path := parts[1]
+		name := path
+		url := urlMap[name]
+		submodules = append(submodules, SubmoduleInfo{
+			Name: name,
+			Path: path,
+			URL:  url,
+			Hash: hash,
+		})
+	}
+	return submodules, nil
+}
+
+// AddSubmodule adds a new submodule to the repository.
+func (r *Repository) AddSubmodule(url, path string) error {
+	cmd := exec.Command("git", "submodule", "add", url, path)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("add submodule: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("submodule added", "url", url, "path", path)
+	return nil
+}
+
+// UpdateSubmodules runs `git submodule update --init --recursive` to
+// initialise and update all submodules to the committed state.
+func (r *Repository) UpdateSubmodules() error {
+	cmd := exec.Command("git", "submodule", "update", "--init", "--recursive")
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("update submodules: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("submodules updated")
+	return nil
+}
+
+// RemoveSubmodule removes a submodule from the repository by deinitialising,
+// removing the worktree directory and unregistering from .gitmodules / config.
+func (r *Repository) RemoveSubmodule(path string) error {
+	// 1. Deinit.
+	cmd := exec.Command("git", "submodule", "deinit", "-f", path)
+	cmd.Dir = r.path
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("deinit submodule: %s", strings.TrimSpace(string(out)))
+	}
+	// 2. Remove from index and working tree.
+	cmd = exec.Command("git", "rm", "-f", path)
+	cmd.Dir = r.path
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git rm submodule: %s", strings.TrimSpace(string(out)))
+	}
+	// 3. Remove leftover .git/modules/<path> directory.
+	modulesDir := filepath.Join(r.path, ".git", "modules", path)
+	_ = os.RemoveAll(modulesDir)
+	slog.Info("submodule removed", "path", path)
+	return nil
+}

@@ -123,6 +123,7 @@ func (cd *CommitDetail) build() {
 	// Actions menu button in the header area — for tag creation, reset, etc.
 	actionsMenu := gio.NewMenu()
 	actionsMenu.Append("Create Tag on this Commit…", "detail.create-tag")
+	actionsMenu.Append("Create Branch from here…", "detail.create-branch")
 
 	resetSection := gio.NewMenu()
 	resetSection.Append("Reset Soft to Here…", "detail.reset-soft")
@@ -226,6 +227,14 @@ func (cd *CommitDetail) build() {
 		}
 	})
 	actionGroup.AddAction(tagAction)
+
+	createBranchAction := gio.NewSimpleAction("create-branch", nil)
+	createBranchAction.ConnectActivate(func(param *glib.Variant) {
+		if cd.commit != nil {
+			cd.Root.ActivateAction("win.create-branch", glib.NewVariantString(cd.commit.Hash))
+		}
+	})
+	actionGroup.AddAction(createBranchAction)
 
 	resetSoftAction := gio.NewSimpleAction("reset-soft", nil)
 	resetSoftAction.ConnectActivate(func(param *glib.Variant) {
