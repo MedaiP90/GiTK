@@ -441,6 +441,9 @@ func (cd *CommitDetail) createExpandableFileRow(diff git.DiffResult) *gtk.ListBo
 	nameLabel.SetHExpand(true)
 	headerBox.Append(nameLabel)
 
+	// Capture path early so closures below can reference it.
+	filePath := diff.NewPath
+
 	// Stats.
 	statsLabel := gtk.NewLabel(fmt.Sprintf("+%d -%d", diff.Stats.Additions, diff.Stats.Deletions))
 	statsLabel.AddCSSClass("dim-label")
@@ -488,7 +491,6 @@ func (cd *CommitDetail) createExpandableFileRow(diff git.DiffResult) *gtk.ListBo
 	outerBox.Append(diffBox)
 
 	// Toggle expand/collapse on row activation.
-	filePath := diff.NewPath
 	row.SetChild(outerBox)
 
 	// Use a click gesture on the header to toggle.

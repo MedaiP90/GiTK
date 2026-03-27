@@ -39,8 +39,9 @@ var actionValues = []git.RebaseTodoAction{
 
 // todoEntry is the internal mutable model for one rebase todo item.
 type todoEntry struct {
-	commit git.CommitInfo
-	action git.RebaseTodoAction
+	commit   git.CommitInfo
+	action   git.RebaseTodoAction
+	dropdown *gtk.DropDown // widget reference; read at start-rebase time
 }
 
 // RebaseView is the interactive rebase UI widget.
@@ -276,12 +277,8 @@ func (rv *RebaseView) buildRow(idx int) *gtk.ListBoxRow {
 			break
 		}
 	}
-	actionDrop.ConnectNotify("selected", func() {
-		sel := actionDrop.Selected()
-		if int(sel) < len(actionValues) {
-			rv.todos[idx].action = actionValues[sel]
-		}
-	})
+	// Store the dropdown reference so startRebase() can read the value.
+	rv.todos[idx].dropdown = actionDrop
 	box.Append(actionDrop)
 
 	// Commit hash pill.
@@ -330,8 +327,15 @@ func (rv *RebaseView) startRebase() {
 	base := rv.baseEntry.Text()
 	todos := make([]git.RebaseTodo, len(rv.todos))
 	for i, e := range rv.todos {
+		action := e.action
+		if e.dropdown != nil {
+			sel := e.dropdown.Selected()
+			if int(sel) < len(actionValues) {
+				action = actionValues[sel]
+			}
+		}
 		todos[i] = git.RebaseTodo{
-			Action:  e.action,
+			Action:  action,
 			Hash:    e.commit.Hash,
 			Subject: e.commit.Subject,
 		}
