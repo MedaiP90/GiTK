@@ -64,6 +64,11 @@ type Config struct {
 	// Graph holds settings for the visual graph view.
 	Graph GraphConfig `json:"graph"`
 
+	// BranchOrder stores custom ordering for local branches in the sidebar.
+	// Branches not listed here appear after the explicitly-ordered ones,
+	// sorted alphabetically.
+	BranchOrder []string `json:"branch_order,omitempty"`
+
 	// configPath is the full path to the config file on disk.
 	// This is not serialized — it's set when loading.
 	configPath string `json:"-"`

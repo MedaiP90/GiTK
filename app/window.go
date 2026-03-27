@@ -31,10 +31,13 @@ import (
 
 	"github.com/MedaiP90/GiTK/config"
 	"github.com/MedaiP90/GiTK/git"
+	"github.com/MedaiP90/GiTK/ui/blame"
 	"github.com/MedaiP90/GiTK/ui/commitdetail"
 	"github.com/MedaiP90/GiTK/ui/commitlog"
 	"github.com/MedaiP90/GiTK/ui/dialogs"
+	"github.com/MedaiP90/GiTK/ui/filehistory"
 	"github.com/MedaiP90/GiTK/ui/merge"
+	"github.com/MedaiP90/GiTK/ui/rebase"
 	"github.com/MedaiP90/GiTK/ui/sidebar"
 	"github.com/MedaiP90/GiTK/ui/stash"
 	"github.com/MedaiP90/GiTK/ui/staging"
@@ -88,6 +91,15 @@ type Window struct {
 
 	// stashView is the stash management page.
 	stashView *stash.StashView
+
+	// blameView is the blame/annotate view.
+	blameView *blame.BlameView
+
+	// fileHistoryView is the per-file commit history view.
+	fileHistoryView *filehistory.FileHistoryView
+
+	// rebaseView is the interactive rebase UI.
+	rebaseView *rebase.RebaseView
 
 	// logBtn and stagingBtn are header bar toggle buttons, kept as fields
 	// so we can update their active state.
@@ -375,8 +387,9 @@ func (w *Window) buildPrimaryMenu() *gtk.MenuButton {
 	// declaratively — each item references a GAction by name.
 	menu := newMenu()
 
-	// Section 1: View actions
+	// Section 1: View / Git actions
 	viewSection := newMenu()
+	viewSection.Append("Interactive Rebase…", "win.open-rebase")
 	viewSection.Append("Keyboard Shortcuts", "app.shortcuts")
 	menu.AppendSection("", viewSection)
 
@@ -451,6 +464,16 @@ func (w *Window) buildContentArea() {
 
 	// --- Commit detail panel ---
 	w.commitDetail = commitdetail.New(w.cfg)
+	w.commitDetail.SetFileCallbacks(
+		func(path, hash string) {
+			w.blameView.Load(path, hash)
+			w.contentStack.SetVisibleChildName("blame")
+		},
+		func(path string) {
+			w.fileHistoryView.Load(path)
+			w.contentStack.SetVisibleChildName("filehistory")
+		},
+	)
 
 	// Combine commit log + detail into a horizontal split.
 	logDetailSplit := gtk.NewPaned(gtk.OrientationHorizontal)
@@ -512,6 +535,41 @@ func (w *Window) buildContentArea() {
 	)
 	w.contentStack.AddNamed(w.mergeView.Root, "merge")
 
+	// --- Blame view ---
+	w.blameView = blame.New(func() {
+		w.contentStack.SetVisibleChildName("log")
+	})
+	w.contentStack.AddNamed(w.blameView.Root, "blame")
+
+	// --- File history view ---
+	w.fileHistoryView = filehistory.New(
+		func() {
+			w.contentStack.SetVisibleChildName("log")
+		},
+		func(commit git.CommitInfo) {
+			// Show the selected commit in the detail panel and switch to log.
+			w.commitDetail.SetCommit(commit)
+			refs := w.commitLog.RefsForCommit(commit.Hash)
+			w.commitDetail.SetRefs(refs)
+			w.contentStack.SetVisibleChildName("log")
+		},
+	)
+	w.contentStack.AddNamed(w.fileHistoryView.Root, "filehistory")
+
+	// --- Interactive rebase view ---
+	w.rebaseView = rebase.New(
+		func() {
+			w.contentStack.SetVisibleChildName("log")
+		},
+		func(msg string) {
+			w.ShowToast(msg)
+			if w.repo != nil {
+				w.commitLog.SetRepository(w.repo)
+			}
+		},
+	)
+	w.contentStack.AddNamed(w.rebaseView.Root, "rebase")
+
 	// Set the welcome page as the visible child.
 	w.contentStack.SetVisibleChildName("welcome")
 
@@ -544,6 +602,9 @@ func (w *Window) onRepoSelected(repo *git.Repository) {
 	w.commitLog.SetRepository(repo)
 	w.commitDetail.SetRepository(repo)
 	w.stashView.SetRepository(repo)
+	w.blameView.SetRepository(repo)
+	w.fileHistoryView.SetRepository(repo)
+	w.rebaseView.SetRepository(repo)
 	w.window.SetTitle(repo.Name())
 
 	// Enable view switcher buttons now that a repo is open.
@@ -892,6 +953,68 @@ func (w *Window) registerWindowActions() {
 		dialog.Present(w.window)
 	})
 	w.window.AddAction(resetHardAction)
+
+	// Cherry-pick action — applies a commit onto the current branch.
+	cherryPickAction := gio.NewSimpleAction("cherry-pick", glib.NewVariantType("s"))
+	cherryPickAction.ConnectActivate(func(param *glib.Variant) {
+		if w.repo == nil || param == nil {
+			return
+		}
+		commitHash := strings.Trim(param.String(), "'\"")
+		dialog := adw.NewAlertDialog(
+			"Cherry-pick commit?",
+			"Apply the changes from "+commitHash[:7]+" onto the current branch.",
+		)
+		dialog.AddResponse("cancel", "Cancel")
+		dialog.AddResponse("apply", "Cherry-pick")
+		dialog.SetResponseAppearance("apply", adw.ResponseSuggested)
+		dialog.SetDefaultResponse("apply")
+		dialog.SetCloseResponse("cancel")
+		dialog.ConnectResponse(func(response string) {
+			if response != "apply" {
+				return
+			}
+			go func() {
+				err := w.repo.CherryPick(commitHash)
+				glib.IdleAdd(func() {
+					if err != nil {
+						w.ShowToast("Cherry-pick failed: " + err.Error())
+						return
+					}
+					w.ShowToast("Cherry-picked " + commitHash[:7])
+					w.commitLog.SetRepository(w.repo)
+					w.updateStagingBadge()
+				})
+			}()
+		})
+		dialog.Present(w.window)
+	})
+	w.window.AddAction(cherryPickAction)
+
+	// Rebase action — opens the interactive rebase view pre-filled from a commit.
+	rebaseAction := gio.NewSimpleAction("rebase", glib.NewVariantType("s"))
+	rebaseAction.ConnectActivate(func(param *glib.Variant) {
+		if w.repo == nil || param == nil {
+			return
+		}
+		commitHash := strings.Trim(param.String(), "'\"")
+		// Use the commit hash as the base — user can refine in the rebase UI.
+		w.rebaseView.SetRepository(w.repo)
+		w.rebaseView.PrepareFromHash(commitHash)
+		w.contentStack.SetVisibleChildName("rebase")
+	})
+	w.window.AddAction(rebaseAction)
+
+	// Open rebase view action — for toolbar/menu access.
+	openRebaseAction := gio.NewSimpleAction("open-rebase", nil)
+	openRebaseAction.ConnectActivate(func(param *glib.Variant) {
+		if w.repo == nil {
+			return
+		}
+		w.rebaseView.SetRepository(w.repo)
+		w.contentStack.SetVisibleChildName("rebase")
+	})
+	w.window.AddAction(openRebaseAction)
 
 }
 

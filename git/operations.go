@@ -1246,3 +1246,313 @@ func (r *Repository) RemoveSubmodule(path string) error {
 	slog.Info("submodule removed", "path", path)
 	return nil
 }
+
+// CherryPick applies the changes introduced by a commit onto the current branch.
+// It shells out to git CLI because go-git's cherry-pick support is limited.
+func (r *Repository) CherryPick(hash string) error {
+	cmd := exec.Command("git", "cherry-pick", hash)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("cherry-pick %s: %s", hash[:7], strings.TrimSpace(string(out)))
+	}
+	slog.Info("cherry-picked", "hash", hash[:7])
+	return nil
+}
+
+// BlameLine holds annotation data for a single line in a file.
+type BlameLine struct {
+	// LineNo is the 1-based line number in the file.
+	LineNo int
+
+	// Hash is the commit hash that last modified this line.
+	Hash string
+
+	// ShortHash is the first 7 characters of Hash.
+	ShortHash string
+
+	// Author is the name of the commit author.
+	Author string
+
+	// Date is the author date of the commit.
+	Date time.Time
+
+	// Message is the commit subject line.
+	Message string
+
+	// Text is the actual line content.
+	Text string
+}
+
+// BlameFile returns blame annotation for every line in the file at path
+// as it existed at commitHash. An empty commitHash uses HEAD.
+func (r *Repository) BlameFile(path, commitHash string) ([]BlameLine, error) {
+	args := []string{"blame", "--porcelain"}
+	if commitHash != "" {
+		args = append(args, commitHash)
+	}
+	args = append(args, "--", path)
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.path
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("blame %s: %w", path, err)
+	}
+
+	return parseBlameOutput(string(out)), nil
+}
+
+// parseBlameOutput parses the output of `git blame --porcelain`.
+func parseBlameOutput(output string) []BlameLine {
+	lines := strings.Split(output, "\n")
+	// Porcelain format: each hunk starts with "<40-hex-hash> <orig> <final> [<lines>]"
+	// followed by key-value header lines, then a line starting with TAB (the actual content).
+	commitInfo := make(map[string]struct {
+		Author  string
+		Date    time.Time
+		Message string
+	})
+
+	var result []BlameLine
+	lineNo := 0
+
+	for i := 0; i < len(lines); {
+		line := lines[i]
+		if len(line) < 40 {
+			i++
+			continue
+		}
+		// Check if this is a hash line (40 hex chars followed by space).
+		hash := line[:40]
+		allHex := true
+		for _, c := range hash {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				allHex = false
+				break
+			}
+		}
+		if !allHex || len(line) < 41 || line[40] != ' ' {
+			i++
+			continue
+		}
+
+		lineNo++
+		i++
+
+		// Read header key-value pairs until the TAB-prefixed content line.
+		ci := commitInfo[hash]
+		for i < len(lines) && len(lines[i]) > 0 && lines[i][0] != '\t' {
+			kv := lines[i]
+			i++
+			if strings.HasPrefix(kv, "author ") {
+				ci.Author = strings.TrimPrefix(kv, "author ")
+			} else if strings.HasPrefix(kv, "author-time ") {
+				ts, err := strconv.ParseInt(strings.TrimPrefix(kv, "author-time "), 10, 64)
+				if err == nil {
+					ci.Date = time.Unix(ts, 0)
+				}
+			} else if strings.HasPrefix(kv, "summary ") {
+				ci.Message = strings.TrimPrefix(kv, "summary ")
+			}
+		}
+		commitInfo[hash] = ci
+
+		// Content line (tab-prefixed).
+		text := ""
+		if i < len(lines) && len(lines[i]) > 0 && lines[i][0] == '\t' {
+			text = lines[i][1:]
+			i++
+		}
+
+		shortHash := hash
+		if len(hash) >= 7 {
+			shortHash = hash[:7]
+		}
+
+		result = append(result, BlameLine{
+			LineNo:    lineNo,
+			Hash:      hash,
+			ShortHash: shortHash,
+			Author:    commitInfo[hash].Author,
+			Date:      commitInfo[hash].Date,
+			Message:   commitInfo[hash].Message,
+			Text:      text,
+		})
+	}
+
+	return result
+}
+
+// FileLog returns the list of commits that touched the given file path,
+// following renames (using git log --follow). Limit 0 means no limit.
+func (r *Repository) FileLog(path string, limit int) ([]CommitInfo, error) {
+	args := []string{"log", "--format=%H\t%s\t%an\t%ae\t%ai", "--follow"}
+	if limit > 0 {
+		args = append(args, fmt.Sprintf("-%d", limit))
+	}
+	args = append(args, "--", path)
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.path
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("file log %s: %w", path, err)
+	}
+
+	var commits []CommitInfo
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 5)
+		if len(parts) < 5 {
+			continue
+		}
+		hash := parts[0]
+		subject := parts[1]
+		author := parts[2]
+		authorEmail := parts[3]
+		dateStr := parts[4]
+
+		shortHash := hash
+		if len(hash) >= 7 {
+			shortHash = hash[:7]
+		}
+
+		t, _ := time.Parse("2006-01-02 15:04:05 -0700", dateStr)
+
+		commits = append(commits, CommitInfo{
+			Hash:        hash,
+			ShortHash:   shortHash,
+			Subject:     subject,
+			Body:        subject,
+			Author:      author,
+			AuthorEmail: authorEmail,
+			AuthorTime:  t,
+		})
+	}
+	return commits, nil
+}
+
+// RebaseTodoAction represents a rebase todo action.
+type RebaseTodoAction string
+
+const (
+	RebasePick   RebaseTodoAction = "pick"
+	RebaseReword RebaseTodoAction = "reword"
+	RebaseEdit   RebaseTodoAction = "edit"
+	RebaseSquash RebaseTodoAction = "squash"
+	RebaseFixup  RebaseTodoAction = "fixup"
+	RebaseDrop   RebaseTodoAction = "drop"
+)
+
+// RebaseTodo is a single entry in the rebase todo list.
+type RebaseTodo struct {
+	Action  RebaseTodoAction
+	Hash    string
+	Subject string
+}
+
+// ListRebaseCommits returns commits reachable from HEAD but not from base,
+// in reverse order (oldest first), suitable for populating a rebase todo list.
+func (r *Repository) ListRebaseCommits(base string) ([]CommitInfo, error) {
+	cmd := exec.Command("git", "log", "--format=%H\t%s\t%an\t%ai", "--reverse", base+"..HEAD")
+	cmd.Dir = r.path
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("list rebase commits: %w", err)
+	}
+
+	var commits []CommitInfo
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) < 4 {
+			continue
+		}
+		hash := parts[0]
+		shortHash := hash
+		if len(hash) >= 7 {
+			shortHash = hash[:7]
+		}
+		t, _ := time.Parse("2006-01-02 15:04:05 -0700", parts[3])
+		commits = append(commits, CommitInfo{
+			Hash:       hash,
+			ShortHash:  shortHash,
+			Subject:    parts[1],
+			Body:       parts[1],
+			Author:     parts[2],
+			AuthorTime: t,
+		})
+	}
+	return commits, nil
+}
+
+// InteractiveRebase starts an interactive rebase using the given todo list.
+// It writes a custom GIT_SEQUENCE_EDITOR script to avoid opening a terminal editor.
+func (r *Repository) InteractiveRebase(base string, todos []RebaseTodo) error {
+	// Build the todo file content.
+	var sb strings.Builder
+	for _, t := range todos {
+		sb.WriteString(string(t.Action))
+		sb.WriteByte(' ')
+		sb.WriteString(t.Hash)
+		sb.WriteByte(' ')
+		sb.WriteString(t.Subject)
+		sb.WriteByte('\n')
+	}
+
+	// Write todo to temp file.
+	todoFile, err := os.CreateTemp("", "gitk-rebase-todo-*")
+	if err != nil {
+		return fmt.Errorf("create todo temp file: %w", err)
+	}
+	defer os.Remove(todoFile.Name())
+	if _, err := todoFile.WriteString(sb.String()); err != nil {
+		todoFile.Close()
+		return fmt.Errorf("write todo: %w", err)
+	}
+	todoFile.Close()
+
+	// Write a tiny shell script that replaces git's sequence editor call.
+	scriptFile, err := os.CreateTemp("", "gitk-seqeditor-*")
+	if err != nil {
+		return fmt.Errorf("create seq-editor temp file: %w", err)
+	}
+	defer os.Remove(scriptFile.Name())
+	script := fmt.Sprintf("#!/bin/sh\ncp %q \"$1\"\n", todoFile.Name())
+	if _, err := scriptFile.WriteString(script); err != nil {
+		scriptFile.Close()
+		return fmt.Errorf("write seq-editor script: %w", err)
+	}
+	scriptFile.Close()
+	if err := os.Chmod(scriptFile.Name(), 0700); err != nil {
+		return fmt.Errorf("chmod seq-editor: %w", err)
+	}
+
+	cmd := exec.Command("git", "rebase", "-i", base)
+	cmd.Dir = r.path
+	cmd.Env = append(os.Environ(), "GIT_SEQUENCE_EDITOR="+scriptFile.Name())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("rebase: %s", strings.TrimSpace(string(out)))
+	}
+
+	slog.Info("interactive rebase completed", "base", base, "todos", len(todos))
+	return nil
+}
+
+// AbortRebase aborts an in-progress interactive rebase.
+func (r *Repository) AbortRebase() error {
+	cmd := exec.Command("git", "rebase", "--abort")
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("rebase --abort: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("rebase aborted")
+	return nil
+}

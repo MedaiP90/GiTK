@@ -53,6 +53,12 @@ type CommitDetail struct {
 	// commit is the currently displayed commit.
 	commit *git.CommitInfo
 
+	// onShowBlame is called when the user wants to blame a file.
+	onShowBlame func(path, commitHash string)
+
+	// onShowFileHistory is called when the user wants to see a file's history.
+	onShowFileHistory func(path string)
+
 	// hashRow shows the full commit hash.
 	hashRow *adw.ActionRow
 
@@ -124,6 +130,11 @@ func (cd *CommitDetail) build() {
 	actionsMenu := gio.NewMenu()
 	actionsMenu.Append("Create Tag on this Commit…", "detail.create-tag")
 	actionsMenu.Append("Create Branch from here…", "detail.create-branch")
+	actionsMenu.Append("Cherry-pick onto Current Branch…", "detail.cherry-pick")
+
+	rebaseSection := gio.NewMenu()
+	rebaseSection.Append("Interactive Rebase from here…", "detail.rebase")
+	actionsMenu.AppendSection("Rebase", rebaseSection)
 
 	resetSection := gio.NewMenu()
 	resetSection.Append("Reset Soft to Here…", "detail.reset-soft")
@@ -260,12 +271,34 @@ func (cd *CommitDetail) build() {
 	})
 	actionGroup.AddAction(resetHardAction)
 
+	cherryPickAction := gio.NewSimpleAction("cherry-pick", nil)
+	cherryPickAction.ConnectActivate(func(param *glib.Variant) {
+		if cd.commit != nil {
+			cd.Root.ActivateAction("win.cherry-pick", glib.NewVariantString(cd.commit.Hash))
+		}
+	})
+	actionGroup.AddAction(cherryPickAction)
+
+	rebaseAction := gio.NewSimpleAction("rebase", nil)
+	rebaseAction.ConnectActivate(func(param *glib.Variant) {
+		if cd.commit != nil {
+			cd.Root.ActivateAction("win.rebase", glib.NewVariantString(cd.commit.Hash))
+		}
+	})
+	actionGroup.AddAction(rebaseAction)
+
 	cd.Root.InsertActionGroup("detail", actionGroup)
 }
 
 // SetRepository sets the current repository for diff computation.
 func (cd *CommitDetail) SetRepository(repo *git.Repository) {
 	cd.repo = repo
+}
+
+// SetFileCallbacks sets the callbacks for blame and file history navigation.
+func (cd *CommitDetail) SetFileCallbacks(onBlame func(path, hash string), onHistory func(path string)) {
+	cd.onShowBlame = onBlame
+	cd.onShowFileHistory = onHistory
 }
 
 // SetCommit loads and displays the details of a commit.
@@ -414,6 +447,30 @@ func (cd *CommitDetail) createExpandableFileRow(diff git.DiffResult) *gtk.ListBo
 	statsLabel.AddCSSClass("caption")
 	statsLabel.SetVAlign(gtk.AlignCenter)
 	headerBox.Append(statsLabel)
+
+	// Blame button.
+	blameBtn := gtk.NewButtonFromIconName("user-info-symbolic")
+	blameBtn.SetTooltipText("Blame this file")
+	blameBtn.AddCSSClass("flat")
+	blameBtn.SetVAlign(gtk.AlignCenter)
+	blameBtn.ConnectClicked(func() {
+		if cd.onShowBlame != nil && cd.commit != nil {
+			cd.onShowBlame(filePath, cd.commit.Hash)
+		}
+	})
+	headerBox.Append(blameBtn)
+
+	// File history button.
+	historyBtn := gtk.NewButtonFromIconName("document-open-recent-symbolic")
+	historyBtn.SetTooltipText("File history")
+	historyBtn.AddCSSClass("flat")
+	historyBtn.SetVAlign(gtk.AlignCenter)
+	historyBtn.ConnectClicked(func() {
+		if cd.onShowFileHistory != nil {
+			cd.onShowFileHistory(filePath)
+		}
+	})
+	headerBox.Append(historyBtn)
 
 	outerBox.Append(headerBox)
 

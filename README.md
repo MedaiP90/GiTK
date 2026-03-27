@@ -46,17 +46,40 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 - Ref pills (branches, tags, remotes) with hit-testing
 
 ### Branch Management
-- Sidebar branch tree with local, remote, and tag sections using `AdwExpanderRow`
+- Sidebar branch tree with local, remote, tag, submodule, and remote sections using `AdwExpanderRow`
 - Click-to-checkout branches
 - Current branch indicator
+- Delete local branches and tags with confirmation
+- Merge any branch into the current branch with confirmation
+- Drag-and-drop reordering for local branches (order saved in config)
+- Add/remove remotes
+- Submodule management: add, update all, remove (with confirmation)
 
 ### Remote Operations
 - Push dialog with remote selection and force-push toggle (with destructive action confirmation via `AdwAlertDialog`)
 - Pull dialog with remote and branch selection
 
+### Commit Actions
+- Create tag on any commit (lightweight or annotated)
+- Create branch from any commit
+- Cherry-pick any commit onto the current branch
+- Reset current branch (soft/mixed/hard) to any commit
+- View per-file blame/annotate for any commit
+- View full file history for any file in a commit
+
 ### Tag & Stash
 - Create tag dialog (lightweight or annotated) — tags are automatically pushed to the remote after creation
-- Stash button in the staging area (stash operations pending go-git backend support)
+- Full stash management: save with message, apply, pop, drop
+- Stash count chip in toolbar showing number of stashed entries
+
+### Blame & File History
+- Blame view: annotates each source line with the commit hash, author, date, and message
+- File history view: shows the full commit log filtered to a single file (follows renames)
+
+### Interactive Rebase
+- Rebase UI: select a base commit, then reorder/squash/fixup/reword/drop commits
+- Drag-and-drop or Up/Down buttons to reorder commits in the todo list
+- Kicks off `git rebase -i` with a pre-built todo — no terminal editor needed
 
 ### Three-Way Merge Editor
 - Three-pane layout: OURS (read-only) | RESULT (editable) | THEIRS (read-only)
@@ -72,9 +95,10 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 - Settings persist to JSON config on window close
 
 ### AI Commit Message Generation (Optional)
-- Claude API integration via the Anthropic Messages API
-- Reads API key from `ANTHROPIC_API_KEY` environment variable
-- Configurable model selection (default: `claude-sonnet-4-20250514`)
+- **Claude (Anthropic)** — Messages API, `ANTHROPIC_API_KEY` env var, models: sonnet/opus/haiku
+- **OpenCode Go** — OpenAI-compatible endpoint at `opencode.ai/zen/go/v1`, `OPENCODE_API_KEY` env var
+- Provider selector in Preferences (switch between Claude and OpenCode Go)
+- Configurable model and optional custom system prompt
 - Generates conventional commit messages from staged diffs
 - Enable/disable from Preferences
 
@@ -256,15 +280,31 @@ GiTK/
 │   │
 │   ├── dialogs/
 │   │   ├── clone.go                 #   Clone repository dialog
-│   │   ├── remote.go                #   Push/Pull dialogs
+│   │   ├── remote.go                #   Push/Pull/Add-remote dialogs
 │   │   ├── tag.go                   #   Create tag dialog
-│   │   └── stash.go                 #   Stash dialog (UI only)
+│   │   ├── stash.go                 #   Stash save dialog
+│   │   ├── branch.go                #   Create branch dialog
+│   │   └── submodule.go             #   Add/remove submodule dialogs
+│   │
+│   ├── stash/
+│   │   └── stash.go                 #   Stash management page
+│   │
+│   ├── blame/
+│   │   └── blameview.go             #   Blame/annotate view
+│   │
+│   ├── filehistory/
+│   │   └── filehistory.go           #   Per-file commit history
+│   │
+│   ├── rebase/
+│   │   └── rebaseview.go            #   Interactive rebase UI
 │   │
 │   └── prefs/
 │       └── prefs.go                 #   AdwPreferencesWindow
 │
 ├── ai/
 │   ├── claude.go                    # Claude API client
+│   ├── opencode.go                  # OpenCode Go API client
+│   ├── provider.go                  # AIProvider interface + factory
 │   └── prompts.go                   # Prompt templates
 │
 └── data/
@@ -384,14 +424,23 @@ The app ID `io.github.MedaiP90.GiTK` follows the Flathub verification format.
 - [x] Preferences window
 - [x] Flatpak packaging files
 
-### v0.2.0 (Planned)
-- [ ] Interactive rebase UI
-- [ ] Cherry-pick dialog
-- [ ] Blame/annotate view
-- [ ] File history view
-- [ ] Submodule management
-- [ ] Stash operations (pending go-git support or git CLI fallback)
-- [ ] Drag-and-drop branch reordering in sidebar
+### v0.2.0 (In Progress)
+- [x] Stash operations (full UI + git CLI backend)
+- [x] Stash count chip in toolbar
+- [x] Submodule management (add, update, remove in sidebar)
+- [x] Branch creation from commit detail action menu
+- [x] Branch deletion and merge from sidebar
+- [x] Tag deletion from sidebar
+- [x] Remove items from recent repositories list
+- [x] Reset-to-commit (soft/mixed/hard) from commit detail
+- [x] Add remotes from sidebar
+- [x] Commit graph rendering fixed (hash-based O(1) lookup)
+- [x] OpenCode Go as second AI provider
+- [x] Cherry-pick dialog (from commit detail action menu)
+- [x] File history view (per-file commit log)
+- [x] Blame/annotate view (per-line commit info)
+- [x] Interactive rebase UI (reorder, squash, fixup, drop)
+- [x] Drag-and-drop branch reordering in sidebar
 
 ### v0.3.0 (Planned)
 - [ ] Built-in image diff viewer

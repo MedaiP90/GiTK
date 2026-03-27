@@ -383,17 +383,28 @@ func (s *Sidebar) RefreshBranches() {
 	remoteExpander.SetIconName("network-server-symbolic")
 	remoteExpander.SetExpanded(false)
 
-	localCount := 0
-	remoteCount := 0
+	// Separate local and remote branches.
+	var localBranches []git.BranchInfo
+	var remoteBranches []git.BranchInfo
+	for _, b := range branches {
+		if b.IsRemote {
+			remoteBranches = append(remoteBranches, b)
+		} else {
+			localBranches = append(localBranches, b)
+		}
+	}
 
-	for _, branch := range branches {
+	// Sort local branches by cfg.BranchOrder, then alphabetically.
+	localBranches = s.sortBranchesByOrder(localBranches)
+
+	for i, branch := range localBranches {
 		isCurrent := branch.Name == currentBranch
 		branchName := branch.Name
-		isRemote := branch.IsRemote
+		idx := i
 
 		var onDelete func()
 		var onMerge func()
-		if !isRemote && !isCurrent {
+		if !isCurrent {
 			onDelete = func() {
 				if s.onBranchDelete != nil {
 					s.onBranchDelete(branchName)
@@ -409,21 +420,29 @@ func (s *Sidebar) RefreshBranches() {
 		row := NewBranchRow(branch, isCurrent, onDelete, onMerge)
 		row.ConnectActivated(func() {
 			if s.onBranchSelected != nil {
-				s.onBranchSelected(branchName, isRemote)
+				s.onBranchSelected(branchName, false)
 			}
 		})
 
-		if branch.IsRemote {
-			remoteExpander.AddRow(row)
-			remoteCount++
-		} else {
-			localExpander.AddRow(row)
-			localCount++
-		}
+		// Add Up/Down reorder buttons.
+		s.addReorderButtons(row, branchName, idx, len(localBranches))
+
+		localExpander.AddRow(row)
 	}
 
-	localExpander.SetSubtitle(formatCount(localCount))
-	remoteExpander.SetSubtitle(formatCount(remoteCount))
+	for _, branch := range remoteBranches {
+		branchName := branch.Name
+		row := NewBranchRow(branch, false, nil, nil)
+		row.ConnectActivated(func() {
+			if s.onBranchSelected != nil {
+				s.onBranchSelected(branchName, true)
+			}
+		})
+		remoteExpander.AddRow(row)
+	}
+
+	localExpander.SetSubtitle(formatCount(len(localBranches)))
+	remoteExpander.SetSubtitle(formatCount(len(remoteBranches)))
 
 	s.branchListBox.Append(localExpander)
 	s.branchListBox.Append(remoteExpander)
@@ -616,6 +635,121 @@ func NewRepoRow(path string) *adw.ActionRow {
 	row.SetActivatable(true)
 
 	return row
+}
+
+// sortBranchesByOrder returns local branches sorted by cfg.BranchOrder,
+// with any remaining branches appended in their original order.
+func (s *Sidebar) sortBranchesByOrder(branches []git.BranchInfo) []git.BranchInfo {
+	order := s.cfg.BranchOrder
+	if len(order) == 0 {
+		return branches
+	}
+
+	// Build a position map from the config order.
+	pos := make(map[string]int, len(order))
+	for i, name := range order {
+		pos[name] = i
+	}
+
+	// Stable-sort: ordered branches first, then the rest.
+	ordered := make([]git.BranchInfo, 0, len(branches))
+	unordered := make([]git.BranchInfo, 0)
+
+	// Use a slice to preserve BranchOrder sequence.
+	orderedMap := make(map[string]git.BranchInfo)
+	for _, b := range branches {
+		if _, ok := pos[b.Name]; ok {
+			orderedMap[b.Name] = b
+		} else {
+			unordered = append(unordered, b)
+		}
+	}
+	for _, name := range order {
+		if b, ok := orderedMap[name]; ok {
+			ordered = append(ordered, b)
+		}
+	}
+
+	return append(ordered, unordered...)
+}
+
+// addReorderButtons adds Up and Down suffix buttons to a branch row so the
+// user can reorder local branches. The order is persisted in cfg.BranchOrder.
+func (s *Sidebar) addReorderButtons(row interface{ AddSuffix(gtk.Widgetter) }, branchName string, idx, total int) {
+	upBtn := gtk.NewButtonFromIconName("go-up-symbolic")
+	upBtn.SetTooltipText("Move up")
+	upBtn.AddCSSClass("flat")
+	upBtn.SetVAlign(gtk.AlignCenter)
+	upBtn.SetSensitive(idx > 0)
+	upBtn.ConnectClicked(func() {
+		s.moveBranch(branchName, -1)
+	})
+
+	downBtn := gtk.NewButtonFromIconName("go-down-symbolic")
+	downBtn.SetTooltipText("Move down")
+	downBtn.AddCSSClass("flat")
+	downBtn.SetVAlign(gtk.AlignCenter)
+	downBtn.SetSensitive(idx < total-1)
+	downBtn.ConnectClicked(func() {
+		s.moveBranch(branchName, +1)
+	})
+
+	row.AddSuffix(upBtn)
+	row.AddSuffix(downBtn)
+}
+
+// moveBranch moves branchName by delta (+1 down, -1 up) in cfg.BranchOrder
+// and refreshes the branch list.
+func (s *Sidebar) moveBranch(branchName string, delta int) {
+	// Ensure all local branches are represented in the order list.
+	// Get current local branches to build a full order.
+	branches, err := s.repo.Branches()
+	if err != nil {
+		return
+	}
+
+	// Build full local branch list in current display order.
+	var localNames []string
+	{
+		var local []git.BranchInfo
+		for _, b := range branches {
+			if !b.IsRemote {
+				local = append(local, b)
+			}
+		}
+		local = s.sortBranchesByOrder(local)
+		for _, b := range local {
+			localNames = append(localNames, b.Name)
+		}
+	}
+
+	// Find current position.
+	cur := -1
+	for i, n := range localNames {
+		if n == branchName {
+			cur = i
+			break
+		}
+	}
+	if cur < 0 {
+		return
+	}
+
+	target := cur + delta
+	if target < 0 || target >= len(localNames) {
+		return
+	}
+
+	// Swap.
+	localNames[cur], localNames[target] = localNames[target], localNames[cur]
+
+	// Save new order.
+	s.cfg.BranchOrder = localNames
+	if err := s.cfg.Save(); err != nil {
+		slog.Warn("failed to save branch order", "error", err)
+	}
+
+	s.RefreshBranches()
 }
 
 // formatCount returns a human-readable count string for expander subtitles.
