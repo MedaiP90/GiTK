@@ -459,6 +459,19 @@ func (r *Repository) Checkout(branchName string) error {
 	return nil
 }
 
+// CheckoutTrack creates a local tracking branch from a remote branch and checks it out.
+// remoteBranch should be in the form "origin/feature-x".
+func (r *Repository) CheckoutTrack(remoteBranch string) error {
+	cmd := exec.Command("git", "checkout", "--track", remoteBranch)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("checkout --track %q: %s", remoteBranch, strings.TrimSpace(string(out)))
+	}
+	slog.Info("checked out tracking branch", "remote", remoteBranch)
+	return nil
+}
+
 // CheckoutCommit checks out a specific commit (detached HEAD).
 func (r *Repository) CheckoutCommit(hash string) error {
 	r.mu.Lock()
@@ -618,6 +631,30 @@ func (r *Repository) DeleteTag(name string) error {
 	}
 
 	slog.Info("tag deleted", "name", name)
+	return nil
+}
+
+// DeleteRemoteBranch deletes a branch from the given remote using git push --delete.
+func (r *Repository) DeleteRemoteBranch(remote, name string) error {
+	cmd := exec.Command("git", "push", remote, "--delete", name)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("delete remote branch: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("remote branch deleted", "remote", remote, "name", name)
+	return nil
+}
+
+// DeleteRemoteTag deletes a tag from the given remote using git push --delete.
+func (r *Repository) DeleteRemoteTag(remote, name string) error {
+	cmd := exec.Command("git", "push", remote, "--delete", "refs/tags/"+name)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("delete remote tag: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("remote tag deleted", "remote", remote, "name", name)
 	return nil
 }
 
@@ -1127,6 +1164,84 @@ func (r *Repository) StashDrop(index int) error {
 		return fmt.Errorf("stash drop: %s", strings.TrimSpace(string(out)))
 	}
 	slog.Info("stash dropped", "index", index)
+	return nil
+}
+
+// StashDiffFile holds the diff output for a single file within a stash entry.
+type StashDiffFile struct {
+	// Path is the file path relative to the repo root.
+	Path string
+
+	// Diff contains the unified diff text for this file.
+	Diff string
+}
+
+// StashShow returns the list of changed files and their diffs for a stash entry.
+func (r *Repository) StashShow(index int) ([]StashDiffFile, error) {
+	ref := "stash@{" + strconv.Itoa(index) + "}"
+	cmd := exec.Command("git", "stash", "show", "-p", "--name-only", ref)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("stash show: %s", strings.TrimSpace(string(out)))
+	}
+
+	raw := string(out)
+	// git stash show --name-only -p outputs:
+	//   <file1>
+	//   <file2>
+	//   ...
+	//   <empty line>
+	//   diff --git ...
+	//
+	// Split at the first empty line to get names vs patch sections.
+	parts := strings.SplitN(raw, "\n\n", 2)
+	var files []StashDiffFile
+
+	if len(parts) < 2 {
+		// No diffs found; still return the file names if present.
+		for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+			if line != "" && !strings.HasPrefix(line, "diff ") {
+				files = append(files, StashDiffFile{Path: line})
+			}
+		}
+		return files, nil
+	}
+
+	// Parse file names from header section.
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(parts[0]), "\n") {
+		if line != "" {
+			names = append(names, line)
+		}
+	}
+
+	// Split patch section by "diff --git " boundaries.
+	patch := parts[1]
+	diffSections := strings.Split(patch, "diff --git ")
+	// diffSections[0] is empty before the first diff.
+	diffs := diffSections[1:]
+
+	for i, name := range names {
+		diff := ""
+		if i < len(diffs) {
+			diff = "diff --git " + diffs[i]
+		}
+		files = append(files, StashDiffFile{Path: name, Diff: diff})
+	}
+
+	return files, nil
+}
+
+// StashClear removes all stash entries from the repository.
+func (r *Repository) StashClear() error {
+	cmd := exec.Command("git", "stash", "clear")
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stash clear: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("stash cleared")
 	return nil
 }
 

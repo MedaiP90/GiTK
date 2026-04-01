@@ -54,6 +54,9 @@ type OnTagDelete func(tagName string)
 // OnBranchMerge is a callback invoked when the user requests to merge a branch into the current one.
 type OnBranchMerge func(branchName string)
 
+// OnBranchRebase is a callback invoked when the user wants to rebase the current branch onto the selected one.
+type OnBranchRebase func(branchName string)
+
 // OnAddRemote is a callback invoked when the user wants to add a new remote.
 type OnAddRemote func()
 
@@ -95,6 +98,9 @@ type Sidebar struct {
 	// onBranchMerge is called when the user requests to merge a branch into the current one.
 	onBranchMerge OnBranchMerge
 
+	// onBranchRebase is called when the user requests to rebase onto a branch.
+	onBranchRebase OnBranchRebase
+
 	// onAddRemote is called when the user wants to add a new remote.
 	onAddRemote OnAddRemote
 
@@ -135,14 +141,15 @@ type Sidebar struct {
 //   - onBranchSelected: callback when a branch is selected.
 // SidebarCallbacks groups all optional action callbacks for the sidebar.
 type SidebarCallbacks struct {
-	OnRepoSelected   OnRepoSelected
-	OnBranchSelected OnBranchSelected
-	OnRepoRemoved    OnRepoRemoved
-	OnBranchDelete   OnBranchDelete
-	OnTagDelete      OnTagDelete
-	OnBranchMerge    OnBranchMerge
-	OnAddRemote      OnAddRemote
-	OnSubmoduleAdd   OnSubmoduleAdd
+	OnRepoSelected    OnRepoSelected
+	OnBranchSelected  OnBranchSelected
+	OnRepoRemoved     OnRepoRemoved
+	OnBranchDelete    OnBranchDelete
+	OnTagDelete       OnTagDelete
+	OnBranchMerge     OnBranchMerge
+	OnBranchRebase    OnBranchRebase
+	OnAddRemote       OnAddRemote
+	OnSubmoduleAdd    OnSubmoduleAdd
 	OnSubmoduleRemove OnSubmoduleRemove
 	OnSubmoduleUpdate OnSubmoduleUpdate
 }
@@ -156,6 +163,7 @@ func New(cfg *config.Config, cb SidebarCallbacks) *Sidebar {
 		onBranchDelete:    cb.OnBranchDelete,
 		onTagDelete:       cb.OnTagDelete,
 		onBranchMerge:     cb.OnBranchMerge,
+		onBranchRebase:    cb.OnBranchRebase,
 		onAddRemote:       cb.OnAddRemote,
 		onSubmoduleAdd:    cb.OnSubmoduleAdd,
 		onSubmoduleRemove: cb.OnSubmoduleRemove,
@@ -383,6 +391,18 @@ func (s *Sidebar) RefreshBranches() {
 	remoteExpander.SetIconName("network-server-symbolic")
 	remoteExpander.SetExpanded(false)
 
+	// "Add Remote" button on the Remote branches expander header.
+	addRemoteBtn := gtk.NewButtonFromIconName("list-add-symbolic")
+	addRemoteBtn.SetTooltipText("Add Remote")
+	addRemoteBtn.AddCSSClass("flat")
+	addRemoteBtn.SetVAlign(gtk.AlignCenter)
+	addRemoteBtn.ConnectClicked(func() {
+		if s.onAddRemote != nil {
+			s.onAddRemote()
+		}
+	})
+	remoteExpander.AddSuffix(addRemoteBtn)
+
 	// Separate local and remote branches.
 	var localBranches []git.BranchInfo
 	var remoteBranches []git.BranchInfo
@@ -402,22 +422,26 @@ func (s *Sidebar) RefreshBranches() {
 		branchName := branch.Name
 		idx := i
 
-		var onDelete func()
-		var onMerge func()
+		var actions BranchActions
 		if !isCurrent {
-			onDelete = func() {
+			actions.OnDelete = func() {
 				if s.onBranchDelete != nil {
 					s.onBranchDelete(branchName)
 				}
 			}
-			onMerge = func() {
+			actions.OnMerge = func() {
 				if s.onBranchMerge != nil {
 					s.onBranchMerge(branchName)
 				}
 			}
+			actions.OnRebase = func() {
+				if s.onBranchRebase != nil {
+					s.onBranchRebase(branchName)
+				}
+			}
 		}
 
-		row := NewBranchRow(branch, isCurrent, onDelete, onMerge)
+		row := NewBranchRow(branch, isCurrent, actions)
 		row.ConnectActivated(func() {
 			if s.onBranchSelected != nil {
 				s.onBranchSelected(branchName, false)
@@ -432,7 +456,7 @@ func (s *Sidebar) RefreshBranches() {
 
 	for _, branch := range remoteBranches {
 		branchName := branch.Name
-		row := NewBranchRow(branch, false, nil, nil)
+		row := NewBranchRow(branch, false, BranchActions{})
 		row.ConnectActivated(func() {
 			if s.onBranchSelected != nil {
 				s.onBranchSelected(branchName, true)
@@ -538,42 +562,6 @@ func (s *Sidebar) RefreshBranches() {
 
 	s.branchListBox.Append(submodulesExpander)
 
-	// Load remotes.
-	remotes, err := s.repo.Remotes()
-	if err != nil {
-		slog.Warn("failed to load remotes", "error", err)
-		return
-	}
-
-	remotesExpander := adw.NewExpanderRow()
-	remotesExpander.SetTitle("Remotes")
-	remotesExpander.SetIconName("network-server-symbolic")
-	remotesExpander.SetExpanded(false)
-	remotesExpander.SetSubtitle(formatCount(len(remotes)))
-
-	// "Add Remote" button in the remotes expander header.
-	addRemoteBtn := gtk.NewButtonFromIconName("list-add-symbolic")
-	addRemoteBtn.SetTooltipText("Add Remote")
-	addRemoteBtn.AddCSSClass("flat")
-	addRemoteBtn.SetVAlign(gtk.AlignCenter)
-	addRemoteBtn.ConnectClicked(func() {
-		if s.onAddRemote != nil {
-			s.onAddRemote()
-		}
-	})
-	remotesExpander.AddSuffix(addRemoteBtn)
-
-	for _, remote := range remotes {
-		row := adw.NewActionRow()
-		row.SetTitle(remote.Name)
-		if len(remote.URLs) > 0 {
-			row.SetSubtitle(remote.URLs[0])
-		}
-		row.SetIconName("network-server-symbolic")
-		remotesExpander.AddRow(row)
-	}
-
-	s.branchListBox.Append(remotesExpander)
 }
 
 // openRepo opens a repository at the given path and notifies the callback.

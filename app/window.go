@@ -180,6 +180,9 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 	// Register window-scope actions (e.g., win.open-repo, win.clone).
 	w.registerWindowActions()
 
+	// Provide window reference to views that need it for dialogs.
+	w.stashView.SetWindow(w.window)
+
 	slog.Info("main window created", "width", 1200, "height", 800)
 
 	return w
@@ -389,7 +392,6 @@ func (w *Window) buildPrimaryMenu() *gtk.MenuButton {
 
 	// Section 1: View / Git actions
 	viewSection := newMenu()
-	viewSection.Append("Interactive Rebase…", "win.open-rebase")
 	viewSection.Append("Keyboard Shortcuts", "app.shortcuts")
 	menu.AppendSection("", viewSection)
 
@@ -432,6 +434,7 @@ func (w *Window) buildContentArea() {
 		OnBranchDelete:    w.onBranchDelete,
 		OnTagDelete:       w.onTagDelete,
 		OnBranchMerge:     w.onBranchMerge,
+		OnBranchRebase:    w.onBranchRebase,
 		OnAddRemote:       w.onAddRemote,
 		OnSubmoduleAdd:    w.onSubmoduleAdd,
 		OnSubmoduleRemove: w.onSubmoduleRemove,
@@ -508,16 +511,7 @@ func (w *Window) buildContentArea() {
 	w.contentStack.AddNamed(w.stagingView.Root, "staging")
 
 	// --- Stash management page ---
-	w.stashView = stash.New(func() {
-		// "Stash Changes" button in stash view opens the stash creation dialog.
-		if w.repo != nil {
-			dialogs.ShowStashDialog(w.window, w.repo, func(msg string) {
-				w.ShowToast(msg)
-				w.stashView.RefreshStashes()
-				w.updateStagingBadge()
-			})
-		}
-	})
+	w.stashView = stash.New()
 	w.contentStack.AddNamed(w.stashView.Root, "stash")
 
 	// --- Merge view ---
@@ -547,10 +541,12 @@ func (w *Window) buildContentArea() {
 			w.contentStack.SetVisibleChildName("log")
 		},
 		func(commit git.CommitInfo) {
-			// Show the selected commit in the detail panel and switch to log.
+			// Show the selected commit in the detail panel, highlight it in
+			// the main commits table, and switch back to the log view.
 			w.commitDetail.SetCommit(commit)
 			refs := w.commitLog.RefsForCommit(commit.Hash)
 			w.commitDetail.SetRefs(refs)
+			w.commitLog.SelectByHash(commit.Hash)
 			w.contentStack.SetVisibleChildName("log")
 		},
 	)
@@ -668,12 +664,45 @@ func (w *Window) updateStagingBadge() {
 }
 
 // onBranchSelected is called by the sidebar when a branch is clicked.
-// It checks out the selected branch and refreshes the commit log.
+// For remote branches not yet available locally, it offers to create a tracking branch.
 func (w *Window) onBranchSelected(branchName string, isRemote bool) {
 	if w.repo == nil {
 		return
 	}
 	slog.Info("branch selected", "name", branchName, "remote", isRemote)
+
+	if isRemote {
+		// Offer to create a local tracking branch instead of trying a raw checkout.
+		dialog := adw.NewAlertDialog(
+			"Create Local Branch",
+			fmt.Sprintf("Create a local tracking branch for '%s' and check it out?", branchName),
+		)
+		dialog.AddResponse("cancel", "Cancel")
+		dialog.AddResponse("track", "Create & Checkout")
+		dialog.SetResponseAppearance("track", adw.ResponseSuggested)
+		dialog.SetDefaultResponse("track")
+		dialog.SetCloseResponse("cancel")
+		dialog.ConnectResponse(func(response string) {
+			if response != "track" {
+				return
+			}
+			go func() {
+				err := w.repo.CheckoutTrack(branchName)
+				glib.IdleAdd(func() {
+					if err != nil {
+						slog.Warn("checkout track failed", "branch", branchName, "error", err)
+						w.ShowToast("Checkout failed: " + err.Error())
+						return
+					}
+					w.ShowToast("Switched to " + branchName)
+					w.commitLog.SetRepository(w.repo)
+					w.sidebar.RefreshBranches()
+				})
+			}()
+		})
+		dialog.Present(w.window)
+		return
+	}
 
 	go func() {
 		err := w.repo.Checkout(branchName)
@@ -696,10 +725,14 @@ func (w *Window) onBranchDelete(branchName string) {
 		return
 	}
 
+	deleteRemoteCheck := gtk.NewCheckButton()
+	deleteRemoteCheck.SetLabel("Also delete remote ref (origin/" + branchName + ")")
+
 	dialog := adw.NewAlertDialog(
 		"Delete Branch",
 		fmt.Sprintf("Delete branch '%s'? This cannot be undone.", branchName),
 	)
+	dialog.SetExtraChild(deleteRemoteCheck)
 	dialog.AddResponse("cancel", "Cancel")
 	dialog.AddResponse("delete", "Delete")
 	dialog.SetResponseAppearance("delete", adw.ResponseDestructive)
@@ -709,6 +742,7 @@ func (w *Window) onBranchDelete(branchName string) {
 		if response != "delete" {
 			return
 		}
+		alsoRemote := deleteRemoteCheck.Active()
 		go func() {
 			err := w.repo.DeleteBranch(branchName)
 			glib.IdleAdd(func() {
@@ -719,6 +753,16 @@ func (w *Window) onBranchDelete(branchName string) {
 				w.ShowToast("Deleted branch " + branchName)
 				w.sidebar.RefreshBranches()
 			})
+			if alsoRemote {
+				remoteErr := w.repo.DeleteRemoteBranch("origin", branchName)
+				glib.IdleAdd(func() {
+					if remoteErr != nil {
+						w.ShowToast("Remote delete failed: " + remoteErr.Error())
+					} else {
+						w.ShowToast("Deleted remote ref origin/" + branchName)
+					}
+				})
+			}
 		}()
 	})
 	dialog.Present(w.window)
@@ -730,10 +774,14 @@ func (w *Window) onTagDelete(tagName string) {
 		return
 	}
 
+	deleteRemoteCheck := gtk.NewCheckButton()
+	deleteRemoteCheck.SetLabel("Also delete from remote (origin)")
+
 	dialog := adw.NewAlertDialog(
 		"Delete Tag",
 		fmt.Sprintf("Delete tag '%s'? This cannot be undone.", tagName),
 	)
+	dialog.SetExtraChild(deleteRemoteCheck)
 	dialog.AddResponse("cancel", "Cancel")
 	dialog.AddResponse("delete", "Delete")
 	dialog.SetResponseAppearance("delete", adw.ResponseDestructive)
@@ -743,6 +791,7 @@ func (w *Window) onTagDelete(tagName string) {
 		if response != "delete" {
 			return
 		}
+		alsoRemote := deleteRemoteCheck.Active()
 		go func() {
 			err := w.repo.DeleteTag(tagName)
 			glib.IdleAdd(func() {
@@ -753,6 +802,16 @@ func (w *Window) onTagDelete(tagName string) {
 				w.ShowToast("Deleted tag " + tagName)
 				w.sidebar.RefreshBranches()
 			})
+			if alsoRemote {
+				remoteErr := w.repo.DeleteRemoteTag("origin", tagName)
+				glib.IdleAdd(func() {
+					if remoteErr != nil {
+						w.ShowToast("Remote delete failed: " + remoteErr.Error())
+					} else {
+						w.ShowToast("Deleted remote tag origin/" + tagName)
+					}
+				})
+			}
 		}()
 	})
 	dialog.Present(w.window)
@@ -798,6 +857,17 @@ func (w *Window) onBranchMerge(branchName string) {
 		}()
 	})
 	dialog.Present(w.window)
+}
+
+// onBranchRebase is called by the sidebar when the user wants to rebase onto a branch.
+// It opens the rebase view and pre-fills the base ref with the tip of the selected branch.
+func (w *Window) onBranchRebase(branchName string) {
+	if w.repo == nil {
+		return
+	}
+	w.rebaseView.SetRepository(w.repo)
+	w.rebaseView.PrepareFromBranch(branchName)
+	w.switchToView("rebase")
 }
 
 // onAddRemote opens the Add Remote dialog.

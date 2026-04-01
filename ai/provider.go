@@ -13,6 +13,7 @@ import (
 const (
 	ProviderClaude   = "claude"
 	ProviderOpenCode = "opencode"
+	ProviderGemini   = "gemini"
 )
 
 // AIProvider is the common interface for AI backends that can generate
@@ -34,6 +35,8 @@ func NewProvider(cfg config.AIConfig) AIProvider {
 		}
 		model := cfg.OpenCodeModel
 		return NewOpenCodeClient(apiKey, model)
+	case ProviderGemini:
+		return NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiModel)
 	default:
 		// Default to Claude.
 		return NewClient(cfg.APIKey, cfg.Model)

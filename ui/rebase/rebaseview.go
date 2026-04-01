@@ -58,8 +58,14 @@ type RebaseView struct {
 	// listBox holds the todo rows.
 	listBox *gtk.ListBox
 
-	// baseEntry lets the user type a base ref (branch, hash, HEAD~N).
-	baseEntry *adw.EntryRow
+	// baseComboRow is the dropdown showing recent commits as base ref options.
+	baseComboRow *adw.ComboRow
+
+	// baseCommitHashes is the parallel slice of full hashes for each combo item.
+	baseCommitHashes []string
+
+	// customBaseEntry lets the user type a custom base ref (branch, HEAD~N, etc.).
+	customBaseEntry *adw.EntryRow
 
 	// startBtn triggers the rebase.
 	startBtn *gtk.Button
@@ -105,22 +111,28 @@ func (rv *RebaseView) build() {
 	// Base selection group.
 	baseGroup := adw.NewPreferencesGroup()
 	baseGroup.SetTitle("Rebase Base")
-	baseGroup.SetDescription("Enter a branch name, commit hash, or relative ref (e.g. HEAD~3, main)")
+	baseGroup.SetDescription("Select the base commit, or enter a custom ref below")
 	baseGroup.SetMarginTop(12)
 	baseGroup.SetMarginStart(12)
 	baseGroup.SetMarginEnd(12)
 
-	rv.baseEntry = adw.NewEntryRow()
-	rv.baseEntry.SetTitle("Base Ref")
-	rv.baseEntry.SetText("HEAD~5")
-	baseGroup.Add(rv.baseEntry)
+	// Commit dropdown — populated when the repository is set.
+	rv.baseComboRow = adw.NewComboRow()
+	rv.baseComboRow.SetTitle("Base Commit")
+	rv.baseComboRow.SetSubtitle("Select from recent commits")
+	baseGroup.Add(rv.baseComboRow)
+
+	// Custom ref entry — overrides the dropdown when non-empty.
+	rv.customBaseEntry = adw.NewEntryRow()
+	rv.customBaseEntry.SetTitle("Or enter a custom ref (branch, HEAD~N, …)")
+	baseGroup.Add(rv.customBaseEntry)
 
 	loadBtn := gtk.NewButtonWithLabel("Load Commits")
 	loadBtn.AddCSSClass("suggested-action")
 	loadBtn.SetMarginTop(8)
 	loadBtn.SetMarginBottom(8)
 	loadBtn.ConnectClicked(func() {
-		rv.loadCommits(rv.baseEntry.Text())
+		rv.loadCommits(rv.selectedBase())
 	})
 
 	loadBox := gtk.NewBox(gtk.OrientationHorizontal, 0)
@@ -161,18 +173,78 @@ func (rv *RebaseView) build() {
 	rv.Root.Append(rv.startBtn)
 }
 
-// SetRepository sets the repository.
+// SetRepository sets the repository and populates the base commit dropdown.
 func (rv *RebaseView) SetRepository(repo *git.Repository) {
 	rv.repo = repo
+	rv.populateBaseDropdown()
 }
 
-// PrepareFromHash pre-fills the base entry with the given commit hash
-// and loads the commits above it. Useful when opened from a commit action.
-func (rv *RebaseView) PrepareFromHash(hash string) {
-	if len(hash) > 7 {
-		rv.baseEntry.SetText(hash)
+// populateBaseDropdown loads the last 50 commits and fills the base combo row.
+func (rv *RebaseView) populateBaseDropdown() {
+	if rv.repo == nil {
+		return
 	}
+	go func() {
+		commits, err := rv.repo.LogAll(50)
+		glib.IdleAdd(func() {
+			if err != nil || len(commits) == 0 {
+				return
+			}
+			labels := make([]string, len(commits))
+			rv.baseCommitHashes = make([]string, len(commits))
+			for i, c := range commits {
+				subj := c.Subject
+				if len(subj) > 60 {
+					subj = subj[:60] + "…"
+				}
+				labels[i] = c.ShortHash + "  " + subj
+				rv.baseCommitHashes[i] = c.Hash
+			}
+			list := gtk.NewStringList(labels)
+			rv.baseComboRow.SetModel(list)
+			// Default to HEAD~5 equivalent: select the 5th entry if available.
+			if len(commits) >= 5 {
+				rv.baseComboRow.SetSelected(4)
+			}
+		})
+	}()
+}
+
+// selectedBase returns the effective base ref: custom entry text if non-empty,
+// otherwise the hash from the dropdown selection.
+func (rv *RebaseView) selectedBase() string {
+	if custom := rv.customBaseEntry.Text(); custom != "" {
+		return custom
+	}
+	sel := rv.baseComboRow.Selected()
+	if int(sel) < len(rv.baseCommitHashes) {
+		return rv.baseCommitHashes[sel]
+	}
+	return ""
+}
+
+// PrepareFromHash selects the matching commit in the dropdown (if found) and
+// loads the rebase commits above it.
+func (rv *RebaseView) PrepareFromHash(hash string) {
+	for i, h := range rv.baseCommitHashes {
+		if h == hash || (len(h) >= 7 && len(hash) >= 7 && h[:7] == hash[:7]) {
+			rv.baseComboRow.SetSelected(uint(i))
+			break
+		}
+	}
+	rv.customBaseEntry.SetText("")
 	rv.loadCommits(hash)
+}
+
+// PrepareFromBranch selects the tip of the given branch in the dropdown.
+func (rv *RebaseView) PrepareFromBranch(branchName string) {
+	if rv.repo == nil {
+		return
+	}
+	// Find the branch tip hash by scanning baseCommitHashes.
+	// Use the branch name as a custom ref as fallback.
+	rv.customBaseEntry.SetText(branchName)
+	rv.loadCommits(branchName)
 }
 
 func (rv *RebaseView) loadCommits(base string) {
@@ -324,7 +396,7 @@ func (rv *RebaseView) startRebase() {
 		return
 	}
 
-	base := rv.baseEntry.Text()
+	base := rv.selectedBase()
 	todos := make([]git.RebaseTodo, len(rv.todos))
 	for i, e := range rv.todos {
 		action := e.action

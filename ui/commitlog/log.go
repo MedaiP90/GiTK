@@ -58,6 +58,17 @@ type CommitLog struct {
 	// graphCommitMap maps hash → GraphCommit for O(1) lookup during bind.
 	graphCommitMap map[string]git.GraphCommit
 
+	// currentBranch is the name of the currently checked-out branch, used
+	// to make the corresponding ref pill stand out in the refs column.
+	currentBranch string
+
+	// graphBox holds one DrawingArea per commit row for the external graph panel.
+	graphBox *gtk.Box
+
+	// graphScrolled is the scrolled window for the external graph panel.
+	// Its vertical adjustment is kept in sync with the table scrolled window.
+	graphScrolled *gtk.ScrolledWindow
+
 	// columnView is the GtkColumnView table widget.
 	columnView *gtk.ColumnView
 
@@ -122,8 +133,7 @@ func (cl *CommitLog) build() {
 	cl.columnView.SetShowColumnSeparators(false)
 	cl.columnView.SetVExpand(true)
 
-	// Add columns.
-	cl.addGraphColumn()
+	// Add columns — graph is now a separate element, NOT a column.
 	cl.addHashColumn()
 	cl.addSubjectColumn()
 	cl.addAuthorColumn()
@@ -156,15 +166,37 @@ func (cl *CommitLog) build() {
 		cl.applyFilter(cl.searchEntry.Text())
 	})
 
-	// Scrolled window for the table.
-	scrolled := gtk.NewScrolledWindow()
-	scrolled.SetChild(cl.columnView)
-	scrolled.SetVExpand(true)
+	// --- Graph panel (left of table) ---
+	cl.graphBox = gtk.NewBox(gtk.OrientationVertical, 0)
+	cl.graphBox.SetVExpand(true)
+
+	cl.graphScrolled = gtk.NewScrolledWindow()
+	cl.graphScrolled.SetChild(cl.graphBox)
+	cl.graphScrolled.SetVExpand(true)
+	cl.graphScrolled.SetPolicy(gtk.PolicyNever, gtk.PolicyExternal)
+	cl.graphScrolled.SetSizeRequest(120, -1)
+
+	// --- Table scrolled window ---
+	tableScrolled := gtk.NewScrolledWindow()
+	tableScrolled.SetChild(cl.columnView)
+	tableScrolled.SetVExpand(true)
+	tableScrolled.SetHExpand(true)
+
+	// Sync graph scroll with table scroll (share vertical adjustment).
+	tableScrolled.ConnectMap(func() {
+		cl.graphScrolled.SetVAdjustment(tableScrolled.VAdjustment())
+	})
+
+	// Horizontal box combining graph panel + table.
+	tableArea := gtk.NewBox(gtk.OrientationHorizontal, 0)
+	tableArea.Append(cl.graphScrolled)
+	tableArea.Append(tableScrolled)
+	tableArea.SetVExpand(true)
 
 	// Main content box.
 	contentBox := gtk.NewBox(gtk.OrientationVertical, 0)
 	contentBox.Append(searchBox)
-	contentBox.Append(scrolled)
+	contentBox.Append(tableArea)
 
 	// Assemble into toolbar view.
 	cl.Root = adw.NewToolbarView()
@@ -203,6 +235,9 @@ func (cl *CommitLog) Refresh() {
 		cl.graphCommitMap[gc.Hash] = gc
 	}
 
+	// Track the current branch for highlighted ref pill.
+	cl.currentBranch = cl.repo.CurrentBranch()
+
 	cl.allCommits = commits
 	cl.setCommits(commits)
 }
@@ -228,12 +263,34 @@ func (cl *CommitLog) setCommits(commits []git.CommitInfo) {
 	}
 	cl.model.Splice(0, 0, hashes)
 
+	// Rebuild the graph panel (one DrawingArea per commit row).
+	cl.rebuildGraphPanel()
+
 	// Pre-select the first commit so the detail panel is populated.
 	if len(commits) > 0 {
 		cl.selection.SetSelected(0)
 	}
 
 	slog.Debug("commit log updated", "count", len(commits))
+}
+
+// rebuildGraphPanel clears and refills the external graph box with one
+// DrawingArea per commit row, each 120 px wide and 28 px tall (matching
+// the row height used by the column view).
+func (cl *CommitLog) rebuildGraphPanel() {
+	// Clear existing drawing areas.
+	for child := cl.graphBox.FirstChild(); child != nil; child = cl.graphBox.FirstChild() {
+		cl.graphBox.Remove(child)
+	}
+
+	for _, commit := range cl.commits {
+		da := NewGraphRenderer()
+		da.SetSizeRequest(120, 28)
+		if gc, ok := cl.graphCommitMap[commit.Hash]; ok {
+			SetGraphCommit(da, gc)
+		}
+		cl.graphBox.Append(da)
+	}
 }
 
 // applyFilter filters the displayed commits by the search text.
@@ -269,6 +326,18 @@ func (cl *CommitLog) RefsForCommit(hash string) []git.GraphRef {
 		return gc.Refs
 	}
 	return nil
+}
+
+// SelectByHash selects the row matching the given commit hash in the table.
+// If the hash is not found in the current (possibly filtered) commit list,
+// the selection is left unchanged.
+func (cl *CommitLog) SelectByHash(hash string) {
+	for i, c := range cl.commits {
+		if c.Hash == hash {
+			cl.selection.SetSelected(uint(i))
+			return
+		}
+	}
 }
 
 // toCell casts a *coreglib.Object to a *gtk.ColumnViewCell.
@@ -358,7 +427,7 @@ func (cl *CommitLog) addSubjectColumn() {
 	})
 
 	col := gtk.NewColumnViewColumn("Subject", &factory.ListItemFactory)
-	col.SetExpand(true)
+	col.SetFixedWidth(400)
 	col.SetResizable(true)
 	cl.columnView.AppendColumn(col)
 }
@@ -463,7 +532,7 @@ func (cl *CommitLog) addRefsColumn() {
 				}
 				row := gtk.NewBox(gtk.OrientationHorizontal, 4)
 				for _, ref := range group {
-					pill := createRefPill(ref)
+					pill := createRefPill(ref, cl.currentBranch)
 					row.Append(pill)
 				}
 				box.Append(row)
@@ -478,14 +547,21 @@ func (cl *CommitLog) addRefsColumn() {
 }
 
 // createRefPill creates a colored label "pill" for a branch/tag ref.
-func createRefPill(ref git.GraphRef) *gtk.Label {
+// currentBranch is the name of the checked-out branch; its pill gets an extra
+// "suggested-action" class so it stands out from other local branch refs.
+func createRefPill(ref git.GraphRef, currentBranch string) *gtk.Label {
 	pill := gtk.NewLabel(ref.Name)
 	pill.AddCSSClass("caption")
 
 	// Style based on ref kind.
 	switch ref.Kind {
 	case git.RefLocalBranch:
-		pill.AddCSSClass("accent")
+		if ref.Name == currentBranch {
+			// Checked-out branch gets a prominent accent-background pill.
+			pill.AddCSSClass("suggested-action")
+		} else {
+			pill.AddCSSClass("accent")
+		}
 	case git.RefRemoteBranch:
 		pill.AddCSSClass("dim-label")
 	case git.RefTag:

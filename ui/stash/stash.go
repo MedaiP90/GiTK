@@ -4,9 +4,9 @@
 // For each stash entry the user can:
 //   - Apply  — restores the stash without removing it.
 //   - Pop    — restores the stash and removes it from the list.
-//   - Drop   — discards the stash without applying it.
+//   - Drop   — discards the stash without applying it (asks for confirmation).
 //
-// A "Stash Changes" button at the top opens the stash creation dialog.
+// A "Clear Stash" button at the top deletes all stash entries after confirmation.
 package stash
 
 import (
@@ -19,9 +19,6 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
 
-// OnStashAction is a callback for stash button actions.
-type OnStashAction func()
-
 // StashView is the stash management page widget.
 type StashView struct {
 	// Root is the top-level widget to embed in the content stack.
@@ -33,18 +30,20 @@ type StashView struct {
 	// listBox holds the stash entry rows.
 	listBox *gtk.ListBox
 
-	// onNewStash is called when the user clicks "Stash Changes".
-	onNewStash OnStashAction
+	// parentWindow is used as presenter for confirmation dialogs.
+	parentWindow gtk.Widgetter
 }
 
 // New creates a new StashView.
-//
-// Parameters:
-//   - onNewStash: called when the user clicks the "Stash Changes" button.
-func New(onNewStash OnStashAction) *StashView {
-	sv := &StashView{onNewStash: onNewStash}
+func New() *StashView {
+	sv := &StashView{}
 	sv.build()
 	return sv
+}
+
+// SetWindow stores the parent window reference needed for dialogs.
+func (sv *StashView) SetWindow(w gtk.Widgetter) {
+	sv.parentWindow = w
 }
 
 // build constructs the stash view widgets.
@@ -52,7 +51,7 @@ func (sv *StashView) build() {
 	sv.Root = gtk.NewBox(gtk.OrientationVertical, 0)
 	sv.Root.SetVExpand(true)
 
-	// Top bar with "Stash Changes" button.
+	// Top bar with "Clear Stash" button.
 	topBar := gtk.NewBox(gtk.OrientationHorizontal, 0)
 	topBar.SetMarginTop(12)
 	topBar.SetMarginBottom(12)
@@ -65,15 +64,13 @@ func (sv *StashView) build() {
 	titleLabel.SetXAlign(0)
 	topBar.Append(titleLabel)
 
-	newStashBtn := gtk.NewButtonWithLabel("Stash Changes")
-	newStashBtn.AddCSSClass("suggested-action")
-	newStashBtn.SetTooltipText("Save current changes to the stash")
-	newStashBtn.ConnectClicked(func() {
-		if sv.onNewStash != nil {
-			sv.onNewStash()
-		}
+	clearStashBtn := gtk.NewButtonWithLabel("Clear Stash")
+	clearStashBtn.AddCSSClass("destructive-action")
+	clearStashBtn.SetTooltipText("Delete all stashed changes")
+	clearStashBtn.ConnectClicked(func() {
+		sv.confirmClearStash()
 	})
-	topBar.Append(newStashBtn)
+	topBar.Append(clearStashBtn)
 
 	sv.Root.Append(topBar)
 
@@ -96,6 +93,41 @@ func (sv *StashView) build() {
 	scrolled.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
 
 	sv.Root.Append(scrolled)
+}
+
+// confirmClearStash shows a confirmation dialog before clearing all stashes.
+func (sv *StashView) confirmClearStash() {
+	if sv.repo == nil {
+		return
+	}
+
+	stashes, err := sv.repo.StashList()
+	if err != nil || len(stashes) == 0 {
+		return
+	}
+
+	body := fmt.Sprintf("Delete all %d stash entries? This cannot be undone.", len(stashes))
+	dialog := adw.NewAlertDialog("Clear Stash", body)
+	dialog.AddResponse("cancel", "Cancel")
+	dialog.AddResponse("clear", "Clear All")
+	dialog.SetResponseAppearance("clear", adw.ResponseDestructive)
+	dialog.SetDefaultResponse("cancel")
+	dialog.SetCloseResponse("cancel")
+	dialog.ConnectResponse(func(response string) {
+		if response != "clear" {
+			return
+		}
+		go func() {
+			err := sv.repo.StashClear()
+			glib.IdleAdd(func() {
+				if err != nil {
+					slog.Warn("stash clear failed", "error", err)
+				}
+				sv.RefreshStashes()
+			})
+		}()
+	})
+	dialog.Present(sv.parentWindow)
 }
 
 // SetRepository sets the current repository and refreshes the stash list.
@@ -145,14 +177,16 @@ func (sv *StashView) showEmpty(msg string) {
 	sv.listBox.Append(row)
 }
 
-// buildStashRow creates a row widget for a single stash entry.
-func (sv *StashView) buildStashRow(stash git.StashInfo) *adw.ActionRow {
-	row := adw.NewActionRow()
+// buildStashRow creates an expandable row widget for a single stash entry.
+// When expanded for the first time, it loads the changed files and their diffs.
+func (sv *StashView) buildStashRow(stash git.StashInfo) *adw.ExpanderRow {
+	row := adw.NewExpanderRow()
 	row.SetTitle(stash.Message)
 	row.SetSubtitle(fmt.Sprintf("stash@{%d}", stash.Index))
 	row.SetIconName("sidebar-show-symbolic")
 
 	idx := stash.Index
+	var diffLoaded bool
 
 	// Apply button.
 	applyBtn := gtk.NewButtonWithLabel("Apply")
@@ -191,15 +225,91 @@ func (sv *StashView) buildStashRow(stash git.StashInfo) *adw.ActionRow {
 	})
 	row.AddSuffix(popBtn)
 
-	// Drop button.
+	// Drop button — asks for confirmation before discarding.
 	dropBtn := gtk.NewButtonFromIconName("edit-delete-symbolic")
 	dropBtn.SetTooltipText("Discard this stash")
 	dropBtn.AddCSSClass("flat")
 	dropBtn.AddCSSClass("error")
 	dropBtn.SetVAlign(gtk.AlignCenter)
 	dropBtn.ConnectClicked(func() {
+		sv.confirmDrop(idx, stash.Message)
+	})
+	row.AddSuffix(dropBtn)
+
+	// Lazy-load diffs when the row is first expanded.
+	row.ConnectActivated(func() {
+		if diffLoaded || !row.Expanded() {
+			return
+		}
+		diffLoaded = true
+		sv.loadStashDiff(row, idx)
+	})
+
+	return row
+}
+
+// loadStashDiff loads the diff for a stash entry and populates child rows.
+func (sv *StashView) loadStashDiff(row *adw.ExpanderRow, index int) {
+	go func() {
+		files, err := sv.repo.StashShow(index)
+		glib.IdleAdd(func() {
+			if err != nil {
+				errRow := adw.NewActionRow()
+				errRow.SetTitle("Could not load diff: " + err.Error())
+				errRow.AddCSSClass("error")
+				row.AddRow(errRow)
+				return
+			}
+			if len(files) == 0 {
+				emptyRow := adw.NewActionRow()
+				emptyRow.SetTitle("No changes")
+				emptyRow.AddCSSClass("dim-label")
+				row.AddRow(emptyRow)
+				return
+			}
+			for _, f := range files {
+				fileExpander := adw.NewExpanderRow()
+				fileExpander.SetTitle(f.Path)
+				fileExpander.SetIconName("text-x-generic-symbolic")
+
+				if f.Diff != "" {
+					diffLabel := gtk.NewLabel(f.Diff)
+					diffLabel.AddCSSClass("monospace")
+					diffLabel.SetXAlign(0)
+					diffLabel.SetSelectable(true)
+					diffLabel.SetWrap(false)
+					diffLabel.SetMarginTop(6)
+					diffLabel.SetMarginBottom(6)
+					diffLabel.SetMarginStart(12)
+					diffLabel.SetMarginEnd(12)
+
+					diffRow := adw.NewActionRow()
+					diffRow.SetChild(diffLabel)
+					fileExpander.AddRow(diffRow)
+				}
+
+				row.AddRow(fileExpander)
+			}
+		})
+	}()
+}
+
+// confirmDrop shows a confirmation dialog before dropping a single stash entry.
+func (sv *StashView) confirmDrop(index int, message string) {
+	title := fmt.Sprintf("Drop stash@{%d}?", index)
+	body := fmt.Sprintf("'%s' will be permanently discarded.", message)
+	dialog := adw.NewAlertDialog(title, body)
+	dialog.AddResponse("cancel", "Cancel")
+	dialog.AddResponse("drop", "Drop")
+	dialog.SetResponseAppearance("drop", adw.ResponseDestructive)
+	dialog.SetDefaultResponse("cancel")
+	dialog.SetCloseResponse("cancel")
+	dialog.ConnectResponse(func(response string) {
+		if response != "drop" {
+			return
+		}
 		go func() {
-			err := sv.repo.StashDrop(idx)
+			err := sv.repo.StashDrop(index)
 			glib.IdleAdd(func() {
 				if err != nil {
 					slog.Warn("stash drop failed", "error", err)
@@ -208,7 +318,5 @@ func (sv *StashView) buildStashRow(stash git.StashInfo) *adw.ActionRow {
 			})
 		}()
 	})
-	row.AddSuffix(dropBtn)
-
-	return row
+	dialog.Present(sv.parentWindow)
 }

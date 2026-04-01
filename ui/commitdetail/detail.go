@@ -71,8 +71,8 @@ type CommitDetail struct {
 	// messageLabel shows the full commit message.
 	messageLabel *gtk.Label
 
-	// refsBox shows branches/tags attached to the commit.
-	refsBox *gtk.Box
+	// refsContainer holds the grouped refs (Local / Remote / Tags) with wrapping.
+	refsContainer *gtk.Box
 
 	// refsGroup is the refs section (hidden when no refs).
 	refsGroup *adw.PreferencesGroup
@@ -185,14 +185,13 @@ func (cd *CommitDetail) build() {
 	// --- Refs (branches/tags) section ---
 	cd.refsGroup = adw.NewPreferencesGroup()
 	cd.refsGroup.SetTitle("Refs")
-	cd.refsBox = gtk.NewBox(gtk.OrientationHorizontal, 6)
-	cd.refsBox.SetMarginTop(6)
-	cd.refsBox.SetMarginBottom(6)
-	cd.refsBox.SetMarginStart(12)
-	cd.refsBox.SetMarginEnd(12)
-	cd.refsBox.SetHExpand(true)
-	// Use a flow-like wrapping via GtkFlowBox-style approach.
-	cd.refsGroup.Add(cd.refsBox)
+	cd.refsContainer = gtk.NewBox(gtk.OrientationVertical, 4)
+	cd.refsContainer.SetMarginTop(6)
+	cd.refsContainer.SetMarginBottom(6)
+	cd.refsContainer.SetMarginStart(12)
+	cd.refsContainer.SetMarginEnd(12)
+	cd.refsContainer.SetHExpand(true)
+	cd.refsGroup.Add(cd.refsContainer)
 	cd.refsGroup.SetVisible(false) // Hidden until a commit with refs is shown.
 	cd.contentBox.Append(cd.refsGroup)
 
@@ -327,9 +326,9 @@ func (cd *CommitDetail) SetCommit(commit git.CommitInfo) {
 
 // SetRefs displays the branches and tags attached to the current commit.
 func (cd *CommitDetail) SetRefs(refs []git.GraphRef) {
-	// Clear existing pills.
-	for child := cd.refsBox.FirstChild(); child != nil; child = cd.refsBox.FirstChild() {
-		cd.refsBox.Remove(child)
+	// Clear existing content.
+	for child := cd.refsContainer.FirstChild(); child != nil; child = cd.refsContainer.FirstChild() {
+		cd.refsContainer.Remove(child)
 	}
 
 	if len(refs) == 0 {
@@ -337,22 +336,60 @@ func (cd *CommitDetail) SetRefs(refs []git.GraphRef) {
 		return
 	}
 
+	// Bucket refs by kind.
+	type refGroup struct {
+		label    string
+		cssClass string
+		refs     []git.GraphRef
+	}
+	groups := []refGroup{
+		{label: "Local", cssClass: "accent"},
+		{label: "Remote", cssClass: "dim-label"},
+		{label: "Tags", cssClass: "warning"},
+	}
 	for _, ref := range refs {
-		pill := gtk.NewLabel(ref.Name)
-		pill.AddCSSClass("caption")
-
 		switch ref.Kind {
-		case git.RefLocalBranch:
-			pill.AddCSSClass("accent")
+		case git.RefLocalBranch, git.RefHEAD:
+			groups[0].refs = append(groups[0].refs, ref)
 		case git.RefRemoteBranch:
-			pill.AddCSSClass("dim-label")
+			groups[1].refs = append(groups[1].refs, ref)
 		case git.RefTag:
-			pill.AddCSSClass("warning")
-		case git.RefHEAD:
-			pill.AddCSSClass("success")
+			groups[2].refs = append(groups[2].refs, ref)
+		}
+	}
+
+	for _, g := range groups {
+		if len(g.refs) == 0 {
+			continue
 		}
 
-		cd.refsBox.Append(pill)
+		// Section label.
+		sectionLabel := gtk.NewLabel(g.label)
+		sectionLabel.AddCSSClass("dim-label")
+		sectionLabel.AddCSSClass("caption")
+		sectionLabel.SetXAlign(0)
+		cd.refsContainer.Append(sectionLabel)
+
+		// FlowBox for pill wrapping.
+		flow := gtk.NewFlowBox()
+		flow.SetSelectionMode(gtk.SelectionNone)
+		flow.SetMaxChildrenPerLine(30)
+		flow.SetMinChildrenPerLine(1)
+		flow.SetColumnSpacing(4)
+		flow.SetRowSpacing(4)
+		flow.SetHExpand(true)
+
+		for _, ref := range g.refs {
+			pill := gtk.NewLabel(ref.Name)
+			pill.AddCSSClass("caption")
+			pill.AddCSSClass(g.cssClass)
+			if ref.Kind == git.RefHEAD {
+				pill.AddCSSClass("success")
+			}
+			flow.Insert(pill, -1)
+		}
+
+		cd.refsContainer.Append(flow)
 	}
 
 	cd.refsGroup.SetVisible(true)

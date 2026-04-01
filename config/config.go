@@ -119,6 +119,12 @@ type AIConfig struct {
 	// OpenCodeModel is the model to use with the OpenCode Go API.
 	OpenCodeModel string `json:"opencode_model,omitempty"`
 
+	// GeminiAPIKey is the API key for Google Gemini AI.
+	GeminiAPIKey string `json:"gemini_api_key,omitempty"`
+
+	// GeminiModel is the Gemini model to use (e.g., "gemini-2.5-flash").
+	GeminiModel string `json:"gemini_model,omitempty"`
+
 	// SystemPrompt is an optional custom system prompt for commit message
 	// generation. If empty, the default prompt is used.
 	SystemPrompt string `json:"system_prompt,omitempty"`

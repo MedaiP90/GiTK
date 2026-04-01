@@ -31,11 +31,17 @@ var openCodeModels = []string{
 	"opencode-go/minimax-m2.5",
 }
 
+// Available Google Gemini models.
+var geminiModels = []string{
+	"gemini-2.5-flash",
+	"gemini-2.5-pro",
+}
+
 // aiProviders lists the display names shown in the provider combo row.
-var aiProviders = []string{"Claude (Anthropic)", "OpenCode Go"}
+var aiProviders = []string{"Claude (Anthropic)", "OpenCode Go", "Google Gemini"}
 
 // aiProviderKeys maps display-name index → config key.
-var aiProviderKeys = []string{"claude", "opencode"}
+var aiProviderKeys = []string{"claude", "opencode", "gemini"}
 
 // Show creates and presents the preferences window.
 //
@@ -209,6 +215,33 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 	openCodeGroup.Add(openCodeModelRow)
 	aiPage.Add(openCodeGroup)
 
+	// Google Gemini settings group.
+	geminiGroup := adw.NewPreferencesGroup()
+	geminiGroup.SetTitle("Google Gemini")
+	geminiGroup.SetDescription("Google Gemini API — ai.google.dev")
+
+	geminiKeyRow := adw.NewPasswordEntryRow()
+	geminiKeyRow.SetTitle("Gemini API Key")
+	if cfg.AI.GeminiAPIKey != "" {
+		geminiKeyRow.SetText(cfg.AI.GeminiAPIKey)
+	}
+	geminiGroup.Add(geminiKeyRow)
+
+	geminiModelRow := adw.NewComboRow()
+	geminiModelRow.SetTitle("Model")
+	geminiModelList := gtk.NewStringList(geminiModels)
+	geminiModelRow.SetModel(geminiModelList)
+	selectedGeminiModel := 0
+	for i, m := range geminiModels {
+		if m == cfg.AI.GeminiModel {
+			selectedGeminiModel = i
+			break
+		}
+	}
+	geminiModelRow.SetSelected(uint(selectedGeminiModel))
+	geminiGroup.Add(geminiModelRow)
+	aiPage.Add(geminiGroup)
+
 	win.Add(aiPage)
 
 	// Save settings when the window is closed.
@@ -249,6 +282,13 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 		ocIdx := openCodeModelRow.Selected()
 		if int(ocIdx) < len(openCodeModels) {
 			cfg.AI.OpenCodeModel = openCodeModels[ocIdx]
+		}
+
+		// Gemini settings.
+		cfg.AI.GeminiAPIKey = geminiKeyRow.Text()
+		geminiIdx := geminiModelRow.Selected()
+		if int(geminiIdx) < len(geminiModels) {
+			cfg.AI.GeminiModel = geminiModels[geminiIdx]
 		}
 
 		if err := cfg.Save(); err != nil {
