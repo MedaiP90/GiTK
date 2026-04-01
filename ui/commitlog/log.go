@@ -167,13 +167,20 @@ func (cl *CommitLog) build() {
 	})
 
 	// --- Graph panel (left of table) ---
+	// Wrap graphBox in a GtkViewport so it implements GtkScrollable.
+	// This prevents the "layout continuously requested" frame-clock loop
+	// that occurs when a non-scrollable widget (GtkBox) is the direct child
+	// of a GtkScrolledWindow whose adjustment is shared with another window.
 	cl.graphBox = gtk.NewBox(gtk.OrientationVertical, 0)
-	cl.graphBox.SetVExpand(true)
+
+	graphViewport := gtk.NewViewport(nil, nil)
+	graphViewport.SetChild(cl.graphBox)
+	graphViewport.SetScrollToFocus(false)
 
 	cl.graphScrolled = gtk.NewScrolledWindow()
-	cl.graphScrolled.SetChild(cl.graphBox)
+	cl.graphScrolled.SetChild(graphViewport)
 	cl.graphScrolled.SetVExpand(true)
-	cl.graphScrolled.SetPolicy(gtk.PolicyNever, gtk.PolicyExternal)
+	cl.graphScrolled.SetPolicy(gtk.PolicyNever, gtk.PolicyNever)
 	cl.graphScrolled.SetSizeRequest(120, -1)
 
 	// --- Table scrolled window ---
@@ -182,7 +189,11 @@ func (cl *CommitLog) build() {
 	tableScrolled.SetVExpand(true)
 	tableScrolled.SetHExpand(true)
 
-	// Sync graph scroll with table scroll (share vertical adjustment).
+	// Sync graph scroll with table scroll.
+	// Share the table's VAdjustment with the graph scrolled window AFTER both
+	// are realized (ConnectMap fires when the widget becomes visible).
+	// GtkScrolledWindow.SetVAdjustment propagates to its GtkScrollable child
+	// (the Viewport), so it correctly offsets the graphBox without layout loops.
 	tableScrolled.ConnectMap(func() {
 		cl.graphScrolled.SetVAdjustment(tableScrolled.VAdjustment())
 	})
