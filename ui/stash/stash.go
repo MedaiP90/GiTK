@@ -237,7 +237,7 @@ func (sv *StashView) buildStashRow(stash git.StashInfo) *adw.ExpanderRow {
 	row.AddSuffix(dropBtn)
 
 	// Lazy-load diffs when the row is first expanded.
-	row.ConnectActivated(func() {
+	row.Connect("notify::expanded", func() {
 		if diffLoaded || !row.Expanded() {
 			return
 		}
