@@ -1170,7 +1170,8 @@ func (r *Repository) StashDrop(index int) error {
 // StashShow returns the list of changed files and their structured diffs for a stash entry.
 func (r *Repository) StashShow(index int) ([]DiffResult, error) {
 	ref := "stash@{" + strconv.Itoa(index) + "}"
-	cmd := exec.Command("git", "stash", "show", "-p", "--name-only", ref)
+	// Use only -p to get the raw patch; parse file paths from diff --git headers.
+	cmd := exec.Command("git", "stash", "show", "-p", ref)
 	cmd.Dir = r.path
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1178,52 +1179,56 @@ func (r *Repository) StashShow(index int) ([]DiffResult, error) {
 	}
 
 	raw := string(out)
-	// git stash show --name-only -p outputs:
-	//   <file1>
-	//   <file2>
-	//   ...
-	//   <empty line>
-	//   diff --git ...
-	//
-	// Split at the first empty line to get names vs patch sections.
-	parts := strings.SplitN(raw, "\n\n", 2)
+
+	// Split the raw patch at "diff --git " boundaries to get per-file sections.
+	sections := strings.Split(raw, "diff --git ")
+	// sections[0] is any output before the first diff (summary stats) — skip it.
+
 	var results []DiffResult
-
-	if len(parts) < 2 {
-		// No diffs found; still return the file names if present.
-		for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
-			if line != "" && !strings.HasPrefix(line, "diff ") {
-				results = append(results, DiffResult{OldPath: line, NewPath: line})
-			}
+	for _, section := range sections[1:] {
+		if strings.TrimSpace(section) == "" {
+			continue
 		}
-		return results, nil
-	}
-
-	// Parse file names from header section.
-	var names []string
-	for _, line := range strings.Split(strings.TrimSpace(parts[0]), "\n") {
-		if line != "" {
-			names = append(names, line)
+		// Extract the file path from the first line: "a/<path> b/<path>"
+		firstNewline := strings.IndexByte(section, '\n')
+		header := section
+		if firstNewline >= 0 {
+			header = section[:firstNewline]
 		}
-	}
+		// header is like "a/path/to/file b/path/to/file"
+		path := extractDiffPath(header)
 
-	// Split patch section by "diff --git " boundaries.
-	patch := parts[1]
-	diffSections := strings.Split(patch, "diff --git ")
-	// diffSections[0] is empty before the first diff.
-	diffs := diffSections[1:]
-
-	for i, name := range names {
-		dr := DiffResult{OldPath: name, NewPath: name, ChangeType: ChangeModified}
-		if i < len(diffs) {
-			dr = ParseRawDiff("diff --git " + diffs[i])
-			dr.OldPath = name
-			dr.NewPath = name
+		dr := ParseRawDiff("diff --git " + section)
+		dr.OldPath = path
+		dr.NewPath = path
+		if dr.ChangeType == 0 {
+			dr.ChangeType = ChangeModified
 		}
 		results = append(results, dr)
 	}
 
 	return results, nil
+}
+
+// extractDiffPath extracts the new file path from a "diff --git" first-line
+// header of the form "a/<path> b/<path>".
+func extractDiffPath(header string) string {
+	// The format is "a/<path> b/<path>".
+	// Find the last " b/" which marks the start of the new path.
+	idx := strings.LastIndex(header, " b/")
+	if idx >= 0 {
+		return header[idx+3:] // strip " b/"
+	}
+	// Fallback: try stripping the "b/" prefix from the right half.
+	parts := strings.SplitN(header, " ", 2)
+	if len(parts) == 2 {
+		p := parts[1]
+		if strings.HasPrefix(p, "b/") {
+			return p[2:]
+		}
+		return p
+	}
+	return header
 }
 
 // StashClear removes all stash entries from the repository.

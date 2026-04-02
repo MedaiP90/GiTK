@@ -145,17 +145,17 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 	w.window.SetTitle("GiTK")
 	w.window.SetDefaultSize(1200, 800)
 
-	// --- Load app icon from data/ directory ---
-	// The icon file is data/io.github.MedaiP90.GiTK.svg (or .png).
-	// We add both the executable-relative data/ dir and the repo-root data/
-	// dir to the icon theme search path so GTK can find the icon by AppID.
+	// --- Load app icon ---
+	// The icon lives under resources/hicolor/256x256/apps/<AppID>.png,
+	// following the XDG icon theme hierarchy so GTK can resolve it by AppID.
+	// We register the resources/ directory (and an exe-relative copy) as an
+	// icon theme search path, then set the window icon by name.
+	iconTheme := gtk.IconThemeGetForDisplay(gdk.DisplayGetDefault())
 	if exe, err := os.Executable(); err == nil {
-		dataDir := filepath.Join(filepath.Dir(exe), "data")
-		gtk.IconThemeGetForDisplay(gdk.DisplayGetDefault()).AddSearchPath(dataDir)
+		iconTheme.AddSearchPath(filepath.Join(filepath.Dir(exe), "resources"))
 	}
-	// Also try relative to the working directory (useful during development).
 	if cwd, err := os.Getwd(); err == nil {
-		gtk.IconThemeGetForDisplay(gdk.DisplayGetDefault()).AddSearchPath(filepath.Join(cwd, "data"))
+		iconTheme.AddSearchPath(filepath.Join(cwd, "resources"))
 	}
 	w.window.SetIconName(AppID)
 
@@ -604,6 +604,9 @@ func (w *Window) buildContentArea() {
 	w.splitPane.SetPosition(280)
 	w.splitPane.SetShrinkStartChild(false)
 	w.splitPane.SetShrinkEndChild(false)
+	// Sidebar stays fixed; all extra space from window resize goes to content.
+	w.splitPane.SetResizeStartChild(false)
+	w.splitPane.SetResizeEndChild(true)
 
 	// --- Toast overlay ---
 	// Wraps everything to allow showing toast notifications.

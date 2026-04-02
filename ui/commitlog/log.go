@@ -277,9 +277,14 @@ func (cl *CommitLog) setCommits(commits []git.CommitInfo) {
 	// Rebuild the graph panel (one DrawingArea per commit row).
 	cl.rebuildGraphPanel()
 
-	// Pre-select the first commit so the detail panel is populated.
+	// Pre-select the first commit and notify the detail panel.
+	// SetSelected(0) alone may not fire ConnectSelectionChanged if the
+	// selection was already at position 0 (e.g., after a refresh).
 	if len(commits) > 0 {
 		cl.selection.SetSelected(0)
+		if cl.onCommitSelected != nil {
+			cl.onCommitSelected(commits[0])
+		}
 	}
 
 	slog.Debug("commit log updated", "count", len(commits))
