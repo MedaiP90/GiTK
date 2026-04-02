@@ -66,9 +66,6 @@ type Window struct {
 	// non-blocking toast notifications (e.g., "Pushed to origin/main").
 	toastOverlay *adw.ToastOverlay
 
-	// splitPane is the sidebar/content split using a resizable pane.
-	splitPane *gtk.Paned
-
 	// contentStack switches between different views in the main content
 	// area: commit log, staging area, graph view, etc.
 	contentStack *gtk.Stack
@@ -229,64 +226,69 @@ func (w *Window) ShowToast(message string) {
 	w.toastOverlay.AddToast(toast)
 }
 
-// buildHeaderBar creates the AdwHeaderBar with action buttons.
+// buildHeaderBar creates the global AdwHeaderBar spanning the full window width.
 //
-// Layout:
+// Layout (GNOME HIG sidebar pattern — single header above NavigationSplitView):
 //
-//	[Open] [Clone]  |  [Log] [Staging] [Stash]    GiTK    [Fetch] [Pull] [Push]  [≡]
+//	[Open] [Clone]    GiTK    [≡ Menu]
 //
-// The left side has buttons for opening/cloning repos and view switchers.
-// The right side has remote operations and the primary menu.
+// Repository-specific actions (view switching, remote ops) live in the
+// content area's secondary toolbar, built inside buildContentArea().
 func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	header := adw.NewHeaderBar()
 
-	// --- Left side: Open and Clone buttons ---
+	// --- Left: Open and Clone buttons (always available) ---
 	openBtn := gtk.NewButtonFromIconName("folder-open-symbolic")
 	openBtn.SetTooltipText("Open Repository (Ctrl+O)")
-	openBtn.ConnectClicked(func() {
-		w.onOpenRepository()
-	})
+	openBtn.ConnectClicked(func() { w.onOpenRepository() })
 	header.PackStart(openBtn)
 
-	// Clone button uses a download icon.
 	cloneBtn := gtk.NewButtonFromIconName("folder-download-symbolic")
 	cloneBtn.SetTooltipText("Clone Repository")
-	cloneBtn.ConnectClicked(func() {
-		w.onCloneRepository()
-	})
+	cloneBtn.ConnectClicked(func() { w.onCloneRepository() })
 	header.PackStart(cloneBtn)
 
-	// --- Spacer between clone and view switcher ---
-	spacer := gtk.NewSeparator(gtk.OrientationVertical)
-	spacer.SetMarginStart(6)
-	spacer.SetMarginEnd(6)
-	header.PackStart(spacer)
+	// --- Right: Primary hamburger menu ---
+	menuBtn := w.buildPrimaryMenu()
+	header.PackEnd(menuBtn)
 
-	// --- View switcher buttons ---
-	// These toggle between the main views: Log and Staging.
-	// They are mutually exclusive — we use regular buttons styled as flat
-	// to avoid the ToggleButton auto-toggle behavior that conflicts with
-	// our manual active state management.
+	return header
+}
+
+// buildContentHeader creates the secondary header bar that lives inside the
+// content navigation page.  It carries the view-switcher (Log / Staging /
+// Stash) on the left and the remote-operation buttons (Fetch / Pull / Push)
+// on the right.
+//
+// Layout:
+//
+//	[Log] [Staging ↕] [Stash ≡]  ·····  [⟳ Fetch] [↓ Pull] [↑ Push]
+func (w *Window) buildContentHeader() *adw.HeaderBar {
+	bar := adw.NewHeaderBar()
+	bar.SetShowTitle(false)
+	bar.SetShowStartTitleButtons(false)
+	bar.SetShowEndTitleButtons(false)
+
+	// --- View switcher: Log ---
 	w.logBtn = gtk.NewToggleButton()
 	w.logBtn.SetIconName("view-list-symbolic")
 	w.logBtn.SetTooltipText("Commit Log")
 	w.logBtn.SetActive(false)
-	w.logBtn.SetSensitive(false) // Disabled until a repo is selected.
+	w.logBtn.SetSensitive(false)
 	w.logBtn.ConnectClicked(func() {
 		if w.repo != nil {
 			w.switchToView("log")
 		}
 	})
-	// Group with staging button so GTK manages mutual exclusivity.
-	header.PackStart(w.logBtn)
+	bar.PackStart(w.logBtn)
 
-	// Staging button — plain icon-only toggle button.
+	// --- View switcher: Staging (with change-count chip) ---
 	w.stagingBtn = gtk.NewToggleButton()
 	w.stagingBtn.SetIconName("document-edit-symbolic")
 	w.stagingBtn.SetTooltipText("Staging Area")
 	w.stagingBtn.SetActive(false)
-	w.stagingBtn.SetSensitive(false) // Disabled until a repo is selected.
-	w.stagingBtn.SetGroup(w.logBtn) // Mutual exclusivity with log button.
+	w.stagingBtn.SetSensitive(false)
+	w.stagingBtn.SetGroup(w.logBtn)
 	w.stagingBtn.ConnectClicked(func() {
 		if w.repo != nil {
 			w.stagingView.SetRepository(w.repo)
@@ -294,27 +296,25 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 		}
 	})
 
-	// External chip label showing "N changes" next to the staging button.
 	w.stagingChip = gtk.NewLabel("")
 	w.stagingChip.AddCSSClass("changes-chip")
 	w.stagingChip.SetVisible(false)
 	w.stagingChip.SetVAlign(gtk.AlignCenter)
 
-	// Wrap button + chip in a horizontal box so they sit side by side.
 	stagingWrap := gtk.NewBox(gtk.OrientationHorizontal, 4)
 	stagingWrap.AddCSSClass("staging-btn-wrap")
 	stagingWrap.SetVAlign(gtk.AlignCenter)
 	stagingWrap.Append(w.stagingBtn)
 	stagingWrap.Append(w.stagingChip)
-	header.PackStart(stagingWrap)
+	bar.PackStart(stagingWrap)
 
-	// Stash button — opens the stash management page.
+	// --- View switcher: Stash (with stash-count chip) ---
 	w.stashBtn = gtk.NewToggleButton()
 	w.stashBtn.SetIconName("sidebar-show-symbolic")
 	w.stashBtn.SetTooltipText("Stash")
 	w.stashBtn.SetActive(false)
-	w.stashBtn.SetSensitive(false) // Disabled until a repo is selected.
-	w.stashBtn.SetGroup(w.logBtn) // Mutual exclusivity with log button.
+	w.stashBtn.SetSensitive(false)
+	w.stashBtn.SetGroup(w.logBtn)
 	w.stashBtn.ConnectClicked(func() {
 		if w.repo != nil {
 			w.stashView.RefreshStashes()
@@ -322,7 +322,6 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 		}
 	})
 
-	// External chip showing how many stash entries exist.
 	w.stashChip = gtk.NewLabel("")
 	w.stashChip.AddCSSClass("changes-chip")
 	w.stashChip.SetVisible(false)
@@ -332,39 +331,9 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	stashWrap.SetVAlign(gtk.AlignCenter)
 	stashWrap.Append(w.stashBtn)
 	stashWrap.Append(w.stashChip)
-	header.PackStart(stashWrap)
+	bar.PackStart(stashWrap)
 
-	// --- Right side: Primary menu ---
-	menuBtn := w.buildPrimaryMenu()
-	header.PackEnd(menuBtn)
-
-	// --- Right side: Remote operations ---
-	pushBtn := gtk.NewButtonFromIconName("send-to-symbolic")
-	pushBtn.SetTooltipText("Push")
-	pushBtn.ConnectClicked(func() {
-		if w.repo != nil {
-			dialogs.ShowPushDialog(w.window, w.repo, func(msg string) {
-				w.ShowToast(msg)
-			})
-		}
-	})
-	header.PackEnd(pushBtn)
-
-	pullBtn := gtk.NewButtonFromIconName("go-down-symbolic")
-	pullBtn.SetTooltipText("Pull")
-	pullBtn.ConnectClicked(func() {
-		if w.repo != nil {
-			dialogs.ShowPullDialog(w.window, w.repo, func(msg string) {
-				w.ShowToast(msg)
-				if w.repo != nil {
-					w.commitLog.SetRepository(w.repo)
-				}
-			})
-		}
-	})
-	header.PackEnd(pullBtn)
-
-	// Fetch button in the toolbar for quick access.
+	// --- Remote operations ---
 	fetchBtn := gtk.NewButtonFromIconName("emblem-synchronizing-symbolic")
 	fetchBtn.SetTooltipText("Fetch")
 	fetchBtn.ConnectClicked(func() {
@@ -384,9 +353,34 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 			})
 		}()
 	})
-	header.PackEnd(fetchBtn)
+	bar.PackEnd(fetchBtn)
 
-	return header
+	pullBtn := gtk.NewButtonFromIconName("go-down-symbolic")
+	pullBtn.SetTooltipText("Pull")
+	pullBtn.ConnectClicked(func() {
+		if w.repo != nil {
+			dialogs.ShowPullDialog(w.window, w.repo, func(msg string) {
+				w.ShowToast(msg)
+				if w.repo != nil {
+					w.commitLog.SetRepository(w.repo)
+				}
+			})
+		}
+	})
+	bar.PackEnd(pullBtn)
+
+	pushBtn := gtk.NewButtonFromIconName("send-to-symbolic")
+	pushBtn.SetTooltipText("Push")
+	pushBtn.ConnectClicked(func() {
+		if w.repo != nil {
+			dialogs.ShowPushDialog(w.window, w.repo, func(msg string) {
+				w.ShowToast(msg)
+			})
+		}
+	})
+	bar.PackEnd(pushBtn)
+
+	return bar
 }
 
 // switchToView switches the content stack to the named view and updates
@@ -394,17 +388,18 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 func (w *Window) switchToView(name string) {
 	w.contentStack.SetVisibleChildName(name)
 
-	// For grouped toggle buttons, setting one active automatically
-	// deactivates the other. Only set active if switching to log/staging.
 	switch name {
 	case "log":
 		w.logBtn.SetActive(true)
 	case "staging":
 		w.stagingBtn.SetActive(true)
+	case "stash":
+		w.stashBtn.SetActive(true)
 	default:
-		// For other views (stash, merge, etc.), deactivate both.
+		// Sub-views (blame, filehistory, rebase, merge) — deactivate all three.
 		w.logBtn.SetActive(false)
 		w.stagingBtn.SetActive(false)
+		w.stashBtn.SetActive(false)
 	}
 }
 
@@ -443,9 +438,22 @@ func newMenu() *gio.Menu {
 	return gio.NewMenu()
 }
 
-// buildContentArea constructs the main content area: a NavigationSplitView
-// with a sidebar on the left and a content stack on the right, all wrapped
-// in a ToastOverlay for notifications.
+// buildContentArea constructs the main content area using AdwNavigationSplitView
+// (GNOME HIG sidebar pattern).  The single global AdwHeaderBar (built by
+// buildHeaderBar) spans the full window width; the NavigationSplitView sits
+// below it and divides the space into a collapsible sidebar (left) and a
+// content pane (right).
+//
+// Content pane layout:
+//
+//	AdwToolbarView
+//	├── [top] content header bar (view switcher + remote ops)
+//	└── content stack (log | staging | stash | …)
+//
+// The pane for log+detail lives directly inside the content stack, so GTK
+// propagates the exact allocated width down to the GtkPaned — fixing the
+// resize synchronisation that was broken with the old GtkPaned+GtkStack
+// approach.
 func (w *Window) buildContentArea() {
 	// --- Sidebar ---
 	// The sidebar shows recent repositories and branch tree.
@@ -503,15 +511,13 @@ func (w *Window) buildContentArea() {
 	)
 
 	// Combine commit log + detail into a horizontal split.
+	// AdwNavigationSplitView (above) propagates the exact content-pane width
+	// to this paned widget, so resize works correctly without any special flags.
+	// Table (start) grows with the window; detail panel (end) stays fixed.
 	logDetailSplit := gtk.NewPaned(gtk.OrientationHorizontal)
 	logDetailSplit.SetStartChild(w.commitLog.Root)
 	logDetailSplit.SetEndChild(w.commitDetail.Root)
-	logDetailSplit.SetPosition(700) // Initial split position.
-	// Allow both children to shrink so the divider can be dragged freely.
-	logDetailSplit.SetShrinkStartChild(true)
-	logDetailSplit.SetShrinkEndChild(true)
-	// Both children resize with the window (default); the table has HExpand
-	// set so it naturally absorbs extra horizontal space.
+	logDetailSplit.SetPosition(700)
 	logDetailSplit.SetResizeStartChild(true)
 	logDetailSplit.SetResizeEndChild(false)
 
@@ -598,23 +604,33 @@ func (w *Window) buildContentArea() {
 	// Set the welcome page as the visible child.
 	w.contentStack.SetVisibleChildName("welcome")
 
-	// --- Resizable sidebar/content split ---
-	// GtkPaned provides a draggable divider between sidebar and content.
-	w.splitPane = gtk.NewPaned(gtk.OrientationHorizontal)
-	w.sidebar.Root.SetSizeRequest(200, -1) // Minimum sidebar width.
-	w.splitPane.SetStartChild(w.sidebar.Root)
-	w.splitPane.SetEndChild(w.contentStack)
-	w.splitPane.SetPosition(280)
-	w.splitPane.SetShrinkStartChild(false)
-	w.splitPane.SetShrinkEndChild(false)
-	// Sidebar stays fixed; all extra space from window resize goes to content.
-	w.splitPane.SetResizeStartChild(false)
-	w.splitPane.SetResizeEndChild(true)
+	// --- Content pane: secondary header + content stack ---
+	// The secondary header carries view-switcher + remote-ops buttons.
+	// Wrapping in AdwToolbarView gives proper header-bar styling and ensures
+	// the content stack fills the remaining height.
+	contentHeader := w.buildContentHeader()
+	contentToolbarView := adw.NewToolbarView()
+	contentToolbarView.AddTopBar(contentHeader)
+	contentToolbarView.SetContent(w.contentStack)
+
+	// --- NavigationSplitView (GNOME HIG sidebar pattern) ---
+	// A single AdwHeaderBar (built by buildHeaderBar) spans the full window
+	// width above the split view.  The split view divides the remaining space
+	// into a collapsible sidebar and the content pane.
+	navSplit := adw.NewNavigationSplitView()
+	navSplit.SetMinSidebarWidth(200)
+	navSplit.SetMaxSidebarWidth(320)
+	navSplit.SetSidebarWidthFraction(0.25)
+
+	sidebarPage := adw.NewNavigationPage(w.sidebar.Root, "Repositories")
+	navSplit.SetSidebar(sidebarPage)
+
+	contentPage := adw.NewNavigationPage(contentToolbarView, "GiTK")
+	navSplit.SetContent(contentPage)
 
 	// --- Toast overlay ---
-	// Wraps everything to allow showing toast notifications.
 	w.toastOverlay = adw.NewToastOverlay()
-	w.toastOverlay.SetChild(w.splitPane)
+	w.toastOverlay.SetChild(navSplit)
 }
 
 // onRepoSelected is called by the sidebar when a repository is selected.

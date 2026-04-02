@@ -14,15 +14,18 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 - Recent repositories list with quick access from the sidebar (auto-collapses on selection)
 - Change indicator badge (with count) on the staging button and recent repos list
 - Deleted repositories automatically detected and removed from recents
-- Resizable sidebar with drag handle
+- `AdwNavigationSplitView` sidebar following GNOME HIG — collapsible on narrow screens, single header bar spanning full width
+- Header bar with Open/Clone buttons on the left and hamburger menu on the right; view-switcher and remote ops move into the content area's secondary header
 - Toolbar buttons disabled when no repository is selected
 - XDG-compliant JSON configuration (`~/.config/gitk/config.json`)
 
 ### Commit History
 - Commit log table using `GtkColumnView` with columns: Graph, Hash, Subject, Author, Date, Refs
-- Inline graph column rendering branch/merge topology with colored lanes
+- Inline graph column: Cairo `GtkDrawingArea` per row renders branch/merge topology — colored lane lines, bezier curves for lane changes, circles for regular commits, diamonds for merges, double-ring for HEAD
+- Column reordering disabled — column order is fixed and intentional
 - Commit detail panel showing full metadata, message, and changed file list with +/- stats
 - Inline expandable diffs under each file in the commit detail panel with syntax-colored added/deleted/context lines
+- Commit table resizes synchronously with the detail panel when the window is resized or the divider is dragged
 - Actions menu button in commit detail for tag creation
 - First commit auto-selected when entering the page
 - Search filtering by message, author, or hash
@@ -95,7 +98,7 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 - Settings persist to JSON config on window close
 
 ### AI Commit Message Generation (Optional)
-- Two providers: **Claude (Anthropic)** and **OpenCode Go**
+- Three providers: **Claude (Anthropic)**, **Google Gemini**, and **OpenCode Go**
 - API keys configured directly in **Preferences > AI** (no environment variable required; env vars are used as a fallback)
 - Provider and model selectable per-provider in Preferences
 - Generates conventional commit messages from staged diffs
@@ -359,7 +362,7 @@ The UI adapts based on the current state (e.g., showing the merge editor when in
 
 ## AI Commit Messages (Optional)
 
-GiTK can generate commit messages using AI. Two providers are supported: **Claude (Anthropic)** and **OpenCode Go**.
+GiTK can generate commit messages using AI. Three providers are supported: **Claude (Anthropic)**, **Google Gemini**, and **OpenCode Go**.
 
 ### Setup
 
@@ -375,6 +378,12 @@ The API key is stored in `~/.config/gitk/config.json` (user-owned, restricted pe
 - API key: enter in Preferences, or set `ANTHROPIC_API_KEY` in the environment
 - Models: `claude-sonnet-4-20250514` (default), `claude-opus-4-20250514`, `claude-haiku-4-5-20251001`
 - Get a key at [console.anthropic.com](https://console.anthropic.com)
+
+### Google Gemini
+
+- API key: enter in Preferences, or set `GEMINI_API_KEY` in the environment
+- Models: `gemini-2.5-flash` (default), `gemini-2.5-pro`, `gemini-2.0-flash`
+- Get a key at [aistudio.google.com](https://aistudio.google.com)
 
 ### OpenCode Go
 
@@ -452,6 +461,11 @@ The app ID `io.github.MedaiP90.GiTK` follows the Flathub verification format.
 - [x] Add remotes from sidebar
 - [x] Commit graph rendering fixed (hash-based O(1) lookup)
 - [x] OpenCode Go as second AI provider
+- [x] Google Gemini as third AI provider
+- [x] `AdwNavigationSplitView` sidebar layout (GNOME HIG compliant)
+- [x] Commit table resize fixed (synchronous with detail panel on window resize/divider drag)
+- [x] Column reordering removed from commit log table
+- [x] Cairo graph column rendering in `GtkColumnView` (lane lines, bezier curves, node shapes)
 - [x] Cherry-pick dialog (from commit detail action menu)
 - [x] File history view (per-file commit log)
 - [x] Blame/annotate view (per-line commit info)
