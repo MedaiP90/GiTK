@@ -26,6 +26,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -143,6 +145,20 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 	w.window.SetTitle("GiTK")
 	w.window.SetDefaultSize(1200, 800)
 
+	// --- Load app icon from data/ directory ---
+	// The icon file is data/io.github.MedaiP90.GiTK.svg (or .png).
+	// We add both the executable-relative data/ dir and the repo-root data/
+	// dir to the icon theme search path so GTK can find the icon by AppID.
+	if exe, err := os.Executable(); err == nil {
+		dataDir := filepath.Join(filepath.Dir(exe), "data")
+		gtk.IconThemeGetForDisplay(gdk.DisplayGetDefault()).AddSearchPath(dataDir)
+	}
+	// Also try relative to the working directory (useful during development).
+	if cwd, err := os.Getwd(); err == nil {
+		gtk.IconThemeGetForDisplay(gdk.DisplayGetDefault()).AddSearchPath(filepath.Join(cwd, "data"))
+	}
+	w.window.SetIconName(AppID)
+
 	// --- Load custom CSS ---
 	cssProvider := gtk.NewCSSProvider()
 	cssProvider.LoadFromString(`
@@ -152,6 +168,14 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 	padding: 2px 8px;
 	background-color: alpha(@accent_bg_color, 0.15);
 	color: @accent_color;
+	font-size: 0.8em;
+}
+.current-branch-chip {
+	border-radius: 8px;
+	padding: 1px 7px;
+	background-color: @accent_bg_color;
+	color: @accent_fg_color;
+	font-weight: bold;
 	font-size: 0.8em;
 }`)
 	gtk.StyleContextAddProviderForDisplay(
@@ -485,6 +509,8 @@ func (w *Window) buildContentArea() {
 	logDetailSplit.SetPosition(700) // Initial split position.
 	logDetailSplit.SetShrinkStartChild(false)
 	logDetailSplit.SetShrinkEndChild(false)
+	logDetailSplit.SetResizeStartChild(true)
+	logDetailSplit.SetResizeEndChild(false)
 
 	w.contentStack.AddNamed(logDetailSplit, "log")
 

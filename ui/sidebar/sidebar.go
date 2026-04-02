@@ -176,13 +176,6 @@ func New(cfg *config.Config, cb SidebarCallbacks) *Sidebar {
 
 // build constructs all the sidebar widgets.
 func (s *Sidebar) build() {
-	// --- Header bar for the sidebar ---
-	// Hide window control buttons since the main window header already has them.
-	header := adw.NewHeaderBar()
-	header.SetShowTitle(true)
-	header.SetShowStartTitleButtons(false)
-	header.SetShowEndTitleButtons(false)
-
 	// --- Main content ---
 	s.contentBox = gtk.NewBox(gtk.OrientationVertical, 0)
 
@@ -199,8 +192,9 @@ func (s *Sidebar) build() {
 	scrolled.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
 
 	// --- Assemble into AdwToolbarView ---
+	// No internal header bar — the sidebar merges visually with the main
+	// application toolbar (GNOME HIG sidebar pattern).
 	s.Root = adw.NewToolbarView()
-	s.Root.AddTopBar(header)
 	s.Root.SetContent(scrolled)
 }
 

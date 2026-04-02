@@ -19,6 +19,100 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
 
+// buildDiffView creates a colored gtk.TextView for a structured DiffResult.
+func buildDiffView(diff git.DiffResult) *gtk.Frame {
+	frame := gtk.NewFrame("")
+
+	buffer := gtk.NewTextBuffer(nil)
+	tagTable := buffer.TagTable()
+
+	addedTag := gtk.NewTextTag("added")
+	addedTag.SetObjectProperty("foreground", "#26a269")
+	addedTag.SetObjectProperty("background", "#26a26920")
+	tagTable.Add(addedTag)
+
+	deletedTag := gtk.NewTextTag("deleted")
+	deletedTag.SetObjectProperty("foreground", "#e01b24")
+	deletedTag.SetObjectProperty("background", "#e01b2420")
+	tagTable.Add(deletedTag)
+
+	hunkTag := gtk.NewTextTag("hunk")
+	hunkTag.SetObjectProperty("foreground", "#1c71d8")
+	tagTable.Add(hunkTag)
+
+	linenoTag := gtk.NewTextTag("lineno")
+	linenoTag.SetObjectProperty("foreground", "#77767b")
+	tagTable.Add(linenoTag)
+
+	for _, hunk := range diff.Hunks {
+		stashInsertWithTag(buffer, hunk.Header+"\n", "hunk")
+		for _, line := range hunk.Lines {
+			prefix := " "
+			tag := ""
+			switch line.Type {
+			case git.DiffLineAdd:
+				prefix = "+"
+				tag = "added"
+			case git.DiffLineDelete:
+				prefix = "-"
+				tag = "deleted"
+			}
+			linenoStr := stashFormatLineNumbers(line)
+			stashInsertWithTag(buffer, linenoStr, "lineno")
+			text := prefix + line.Content + "\n"
+			if tag != "" {
+				stashInsertWithTag(buffer, text, tag)
+			} else {
+				stashInsertPlain(buffer, text)
+			}
+		}
+		stashInsertPlain(buffer, "\n")
+	}
+
+	if len(diff.Hunks) == 0 {
+		stashInsertPlain(buffer, "No changes to display.\n")
+	}
+
+	textView := gtk.NewTextViewWithBuffer(buffer)
+	textView.SetEditable(false)
+	textView.SetCursorVisible(false)
+	textView.SetMonospace(true)
+	textView.SetWrapMode(gtk.WrapNone)
+	textView.SetTopMargin(6)
+	textView.SetBottomMargin(6)
+	textView.SetLeftMargin(6)
+	textView.SetRightMargin(6)
+
+	frame.SetChild(textView)
+	return frame
+}
+
+func stashInsertWithTag(buffer *gtk.TextBuffer, text, tagName string) {
+	endIter := buffer.EndIter()
+	offset := endIter.Offset()
+	buffer.Insert(endIter, text)
+	startIter := buffer.IterAtOffset(offset)
+	newEndIter := buffer.EndIter()
+	buffer.ApplyTagByName(tagName, startIter, newEndIter)
+}
+
+func stashInsertPlain(buffer *gtk.TextBuffer, text string) {
+	endIter := buffer.EndIter()
+	buffer.Insert(endIter, text)
+}
+
+func stashFormatLineNumbers(line git.DiffLine) string {
+	old := "    "
+	newL := "    "
+	if line.OldLineNo > 0 {
+		old = fmt.Sprintf("%4d", line.OldLineNo)
+	}
+	if line.NewLineNo > 0 {
+		newL = fmt.Sprintf("%4d", line.NewLineNo)
+	}
+	return old + " " + newL + " "
+}
+
 // StashView is the stash management page widget.
 type StashView struct {
 	// Root is the top-level widget to embed in the content stack.
@@ -251,7 +345,7 @@ func (sv *StashView) buildStashRow(stash git.StashInfo) *adw.ExpanderRow {
 // loadStashDiff loads the diff for a stash entry and populates child rows.
 func (sv *StashView) loadStashDiff(row *adw.ExpanderRow, index int) {
 	go func() {
-		files, err := sv.repo.StashShow(index)
+		diffs, err := sv.repo.StashShow(index)
 		glib.IdleAdd(func() {
 			if err != nil {
 				errRow := adw.NewActionRow()
@@ -260,33 +354,27 @@ func (sv *StashView) loadStashDiff(row *adw.ExpanderRow, index int) {
 				row.AddRow(errRow)
 				return
 			}
-			if len(files) == 0 {
+			if len(diffs) == 0 {
 				emptyRow := adw.NewActionRow()
 				emptyRow.SetTitle("No changes")
 				emptyRow.AddCSSClass("dim-label")
 				row.AddRow(emptyRow)
 				return
 			}
-			for _, f := range files {
+			for _, diff := range diffs {
 				fileExpander := adw.NewExpanderRow()
-				fileExpander.SetTitle(f.Path)
+				fileExpander.SetTitle(diff.NewPath)
 				fileExpander.SetIconName("text-x-generic-symbolic")
 
-				if f.Diff != "" {
-					diffLabel := gtk.NewLabel(f.Diff)
-					diffLabel.AddCSSClass("monospace")
-					diffLabel.SetXAlign(0)
-					diffLabel.SetSelectable(true)
-					diffLabel.SetWrap(false)
-					diffLabel.SetMarginTop(6)
-					diffLabel.SetMarginBottom(6)
-					diffLabel.SetMarginStart(12)
-					diffLabel.SetMarginEnd(12)
+				diffView := buildDiffView(diff)
+				diffView.SetMarginTop(6)
+				diffView.SetMarginBottom(6)
+				diffView.SetMarginStart(12)
+				diffView.SetMarginEnd(12)
 
-					diffRow := adw.NewActionRow()
-					diffRow.SetChild(diffLabel)
-					fileExpander.AddRow(diffRow)
-				}
+				diffRow := adw.NewActionRow()
+				diffRow.SetChild(diffView)
+				fileExpander.AddRow(diffRow)
 
 				row.AddRow(fileExpander)
 			}

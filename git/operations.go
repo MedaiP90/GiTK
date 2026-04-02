@@ -1167,17 +1167,8 @@ func (r *Repository) StashDrop(index int) error {
 	return nil
 }
 
-// StashDiffFile holds the diff output for a single file within a stash entry.
-type StashDiffFile struct {
-	// Path is the file path relative to the repo root.
-	Path string
-
-	// Diff contains the unified diff text for this file.
-	Diff string
-}
-
-// StashShow returns the list of changed files and their diffs for a stash entry.
-func (r *Repository) StashShow(index int) ([]StashDiffFile, error) {
+// StashShow returns the list of changed files and their structured diffs for a stash entry.
+func (r *Repository) StashShow(index int) ([]DiffResult, error) {
 	ref := "stash@{" + strconv.Itoa(index) + "}"
 	cmd := exec.Command("git", "stash", "show", "-p", "--name-only", ref)
 	cmd.Dir = r.path
@@ -1196,16 +1187,16 @@ func (r *Repository) StashShow(index int) ([]StashDiffFile, error) {
 	//
 	// Split at the first empty line to get names vs patch sections.
 	parts := strings.SplitN(raw, "\n\n", 2)
-	var files []StashDiffFile
+	var results []DiffResult
 
 	if len(parts) < 2 {
 		// No diffs found; still return the file names if present.
 		for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
 			if line != "" && !strings.HasPrefix(line, "diff ") {
-				files = append(files, StashDiffFile{Path: line})
+				results = append(results, DiffResult{OldPath: line, NewPath: line})
 			}
 		}
-		return files, nil
+		return results, nil
 	}
 
 	// Parse file names from header section.
@@ -1223,14 +1214,16 @@ func (r *Repository) StashShow(index int) ([]StashDiffFile, error) {
 	diffs := diffSections[1:]
 
 	for i, name := range names {
-		diff := ""
+		dr := DiffResult{OldPath: name, NewPath: name, ChangeType: ChangeModified}
 		if i < len(diffs) {
-			diff = "diff --git " + diffs[i]
+			dr = ParseRawDiff("diff --git " + diffs[i])
+			dr.OldPath = name
+			dr.NewPath = name
 		}
-		files = append(files, StashDiffFile{Path: name, Diff: diff})
+		results = append(results, dr)
 	}
 
-	return files, nil
+	return results, nil
 }
 
 // StashClear removes all stash entries from the repository.

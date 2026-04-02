@@ -604,3 +604,106 @@ func changeToResult(change *object.Change) (DiffResult, error) {
 func hashFromString(s string) plumbing.Hash {
 	return plumbing.NewHash(s)
 }
+
+// ParseRawDiff parses a unified diff string (as produced by git diff / git
+// stash show -p) into a DiffResult. Only the Hunks and Stats fields are
+// populated; path fields are left empty for the caller to fill in.
+func ParseRawDiff(raw string) DiffResult {
+	var result DiffResult
+	var currentHunk *Hunk
+
+	oldLine := 0
+	newLine := 0
+
+	for _, line := range strings.SplitAfter(raw, "\n") {
+		stripped := strings.TrimRight(line, "\n")
+
+		if strings.HasPrefix(stripped, "@@") {
+			// Flush previous hunk.
+			if currentHunk != nil {
+				result.Hunks = append(result.Hunks, *currentHunk)
+			}
+			currentHunk = &Hunk{Header: stripped}
+			// Parse @@ -old,count +new,count @@
+			// Format: @@ -OldStart[,OldLines] +NewStart[,NewLines] @@
+			var oldStart, oldLines, newStart, newLines int
+			_, err := fmt.Sscanf(stripped, "@@ -%d,%d +%d,%d", &oldStart, &oldLines, &newStart, &newLines)
+			if err != nil {
+				// Try without line counts (single-line hunks): @@ -N +N @@
+				fmt.Sscanf(stripped, "@@ -%d +%d", &oldStart, &newStart)
+				oldLines = 1
+				newLines = 1
+			}
+			currentHunk.OldStart = oldStart
+			currentHunk.OldLines = oldLines
+			currentHunk.NewStart = newStart
+			currentHunk.NewLines = newLines
+			oldLine = oldStart
+			newLine = newStart
+			continue
+		}
+
+		if currentHunk == nil {
+			// Still in the file header (diff --git, index, ---, +++) — skip.
+			continue
+		}
+
+		if stripped == "" && line == "\n" {
+			// Blank context line.
+			currentHunk.Lines = append(currentHunk.Lines, DiffLine{
+				Type:      DiffLineContext,
+				Content:   "",
+				OldLineNo: oldLine,
+				NewLineNo: newLine,
+			})
+			oldLine++
+			newLine++
+			continue
+		}
+
+		if len(stripped) == 0 {
+			continue
+		}
+
+		prefix := stripped[0]
+		content := stripped[1:]
+
+		switch prefix {
+		case '+':
+			currentHunk.Lines = append(currentHunk.Lines, DiffLine{
+				Type:      DiffLineAdd,
+				Content:   content,
+				OldLineNo: 0,
+				NewLineNo: newLine,
+			})
+			newLine++
+			result.Stats.Additions++
+		case '-':
+			currentHunk.Lines = append(currentHunk.Lines, DiffLine{
+				Type:      DiffLineDelete,
+				Content:   content,
+				OldLineNo: oldLine,
+				NewLineNo: 0,
+			})
+			oldLine++
+			result.Stats.Deletions++
+		case ' ':
+			currentHunk.Lines = append(currentHunk.Lines, DiffLine{
+				Type:      DiffLineContext,
+				Content:   content,
+				OldLineNo: oldLine,
+				NewLineNo: newLine,
+			})
+			oldLine++
+			newLine++
+		case '\\':
+			// "\ No newline at end of file" — skip.
+		}
+	}
+
+	if currentHunk != nil {
+		result.Hunks = append(result.Hunks, *currentHunk)
+	}
+
+	return result
+}

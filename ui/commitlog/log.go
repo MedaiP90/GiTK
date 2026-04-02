@@ -558,8 +558,9 @@ func (cl *CommitLog) addRefsColumn() {
 }
 
 // createRefPill creates a colored label "pill" for a branch/tag ref.
-// currentBranch is the name of the checked-out branch; its pill gets an extra
-// "suggested-action" class so it stands out from other local branch refs.
+// currentBranch is the name of the checked-out branch; its pill uses the
+// "current-branch-chip" CSS class (solid accent background + white text)
+// to make the active branch clearly distinguishable.
 func createRefPill(ref git.GraphRef, currentBranch string) *gtk.Label {
 	pill := gtk.NewLabel(ref.Name)
 	pill.AddCSSClass("caption")
@@ -568,8 +569,8 @@ func createRefPill(ref git.GraphRef, currentBranch string) *gtk.Label {
 	switch ref.Kind {
 	case git.RefLocalBranch:
 		if ref.Name == currentBranch {
-			// Checked-out branch gets a prominent accent-background pill.
-			pill.AddCSSClass("suggested-action")
+			// Checked-out branch: solid accent chip for maximum visibility.
+			pill.AddCSSClass("current-branch-chip")
 		} else {
 			pill.AddCSSClass("accent")
 		}
