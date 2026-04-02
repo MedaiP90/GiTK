@@ -507,8 +507,11 @@ func (w *Window) buildContentArea() {
 	logDetailSplit.SetStartChild(w.commitLog.Root)
 	logDetailSplit.SetEndChild(w.commitDetail.Root)
 	logDetailSplit.SetPosition(700) // Initial split position.
-	logDetailSplit.SetShrinkStartChild(false)
-	logDetailSplit.SetShrinkEndChild(false)
+	// Allow both children to shrink so the divider can be dragged freely.
+	logDetailSplit.SetShrinkStartChild(true)
+	logDetailSplit.SetShrinkEndChild(true)
+	// Both children resize with the window (default); the table has HExpand
+	// set so it naturally absorbs extra horizontal space.
 	logDetailSplit.SetResizeStartChild(true)
 	logDetailSplit.SetResizeEndChild(false)
 

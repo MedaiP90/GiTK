@@ -91,6 +91,13 @@ func SetGraphCommit(da *gtk.DrawingArea, commit git.GraphCommit) {
 	da.QueueDraw()
 }
 
+// ClearGraphCommit resets a recycled DrawingArea to the empty state.
+func ClearGraphCommit(da *gtk.DrawingArea) {
+	key := drawingAreaKey(da)
+	graphDataMap.Store(key, &graphData{})
+	da.QueueDraw()
+}
+
 // drawGraph is the Cairo drawing function called by GTK for each frame.
 // It renders the lane lines, edges, and commit node for this row.
 func drawGraph(da *gtk.DrawingArea, cr *cairo.Context, width, height int) {

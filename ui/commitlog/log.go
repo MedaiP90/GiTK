@@ -62,13 +62,6 @@ type CommitLog struct {
 	// to make the corresponding ref pill stand out in the refs column.
 	currentBranch string
 
-	// graphBox holds one DrawingArea per commit row for the external graph panel.
-	graphBox *gtk.Box
-
-	// graphScrolled is the scrolled window for the external graph panel.
-	// Its vertical adjustment is kept in sync with the table scrolled window.
-	graphScrolled *gtk.ScrolledWindow
-
 	// columnView is the GtkColumnView table widget.
 	columnView *gtk.ColumnView
 
@@ -133,7 +126,8 @@ func (cl *CommitLog) build() {
 	cl.columnView.SetShowColumnSeparators(false)
 	cl.columnView.SetVExpand(true)
 
-	// Add columns — graph is now a separate element, NOT a column.
+	// Graph is the first column in the ColumnView so it scrolls with the table.
+	cl.addGraphColumn()
 	cl.addHashColumn()
 	cl.addSubjectColumn()
 	cl.addAuthorColumn()
@@ -166,43 +160,18 @@ func (cl *CommitLog) build() {
 		cl.applyFilter(cl.searchEntry.Text())
 	})
 
-	// --- Graph panel (left of table) ---
-	// Wrap graphBox in a GtkViewport so it implements GtkScrollable.
-	// This prevents the "layout continuously requested" frame-clock loop
-	// that occurs when a non-scrollable widget (GtkBox) is the direct child
-	// of a GtkScrolledWindow whose adjustment is shared with another window.
-	cl.graphBox = gtk.NewBox(gtk.OrientationVertical, 0)
-
-	graphViewport := gtk.NewViewport(nil, nil)
-	graphViewport.SetChild(cl.graphBox)
-	graphViewport.SetScrollToFocus(false)
-
-	cl.graphScrolled = gtk.NewScrolledWindow()
-	cl.graphScrolled.SetChild(graphViewport)
-	cl.graphScrolled.SetVExpand(true)
-	cl.graphScrolled.SetPolicy(gtk.PolicyNever, gtk.PolicyNever)
-	cl.graphScrolled.SetSizeRequest(120, -1)
-
 	// --- Table scrolled window ---
+	// The graph is the first column of the ColumnView, so it scrolls naturally
+	// with the table — no separate graph panel or shared-adjustment sync needed.
 	tableScrolled := gtk.NewScrolledWindow()
 	tableScrolled.SetChild(cl.columnView)
 	tableScrolled.SetVExpand(true)
 	tableScrolled.SetHExpand(true)
 
-	// Sync graph scroll with table scroll.
-	// Share the table's VAdjustment with the graph scrolled window AFTER both
-	// are realized (ConnectMap fires when the widget becomes visible).
-	// GtkScrolledWindow.SetVAdjustment propagates to its GtkScrollable child
-	// (the Viewport), so it correctly offsets the graphBox without layout loops.
-	tableScrolled.ConnectMap(func() {
-		cl.graphScrolled.SetVAdjustment(tableScrolled.VAdjustment())
-	})
-
-	// Horizontal box combining graph panel + table.
 	tableArea := gtk.NewBox(gtk.OrientationHorizontal, 0)
-	tableArea.Append(cl.graphScrolled)
 	tableArea.Append(tableScrolled)
 	tableArea.SetVExpand(true)
+	tableArea.SetHExpand(true)
 
 	// Main content box.
 	contentBox := gtk.NewBox(gtk.OrientationVertical, 0)
@@ -212,6 +181,7 @@ func (cl *CommitLog) build() {
 	// Assemble into toolbar view.
 	cl.Root = adw.NewToolbarView()
 	cl.Root.SetContent(contentBox)
+	cl.Root.SetHExpand(true)
 }
 
 // SetRepository loads commits from the given repository.
@@ -274,9 +244,6 @@ func (cl *CommitLog) setCommits(commits []git.CommitInfo) {
 	}
 	cl.model.Splice(0, 0, hashes)
 
-	// Rebuild the graph panel (one DrawingArea per commit row).
-	cl.rebuildGraphPanel()
-
 	// Pre-select the first commit and notify the detail panel.
 	// SetSelected(0) alone may not fire ConnectSelectionChanged if the
 	// selection was already at position 0 (e.g., after a refresh).
@@ -290,24 +257,6 @@ func (cl *CommitLog) setCommits(commits []git.CommitInfo) {
 	slog.Debug("commit log updated", "count", len(commits))
 }
 
-// rebuildGraphPanel clears and refills the external graph box with one
-// DrawingArea per commit row, each 120 px wide and 28 px tall (matching
-// the row height used by the column view).
-func (cl *CommitLog) rebuildGraphPanel() {
-	// Clear existing drawing areas.
-	for child := cl.graphBox.FirstChild(); child != nil; child = cl.graphBox.FirstChild() {
-		cl.graphBox.Remove(child)
-	}
-
-	for _, commit := range cl.commits {
-		da := NewGraphRenderer()
-		da.SetSizeRequest(120, 28)
-		if gc, ok := cl.graphCommitMap[commit.Hash]; ok {
-			SetGraphCommit(da, gc)
-		}
-		cl.graphBox.Append(da)
-	}
-}
 
 // applyFilter filters the displayed commits by the search text.
 func (cl *CommitLog) applyFilter(query string) {
@@ -371,7 +320,7 @@ func (cl *CommitLog) addGraphColumn() {
 	factory.ConnectSetup(func(obj *coreglib.Object) {
 		item := toCell(obj)
 		renderer := NewGraphRenderer()
-		renderer.SetSizeRequest(100, 28)
+		renderer.SetSizeRequest(120, 28)
 		item.SetChild(renderer)
 	})
 
@@ -382,13 +331,21 @@ func (cl *CommitLog) addGraphColumn() {
 		if int(pos) < len(cl.commits) {
 			if gc, ok := cl.graphCommitMap[cl.commits[pos].Hash]; ok {
 				SetGraphCommit(da, gc)
+				return
 			}
 		}
+		ClearGraphCommit(da)
+	})
+
+	factory.ConnectUnbind(func(obj *coreglib.Object) {
+		item := toCell(obj)
+		da := item.Child().(*gtk.DrawingArea)
+		ClearGraphCommit(da)
 	})
 
 	col := gtk.NewColumnViewColumn("Graph", &factory.ListItemFactory)
 	col.SetFixedWidth(120)
-	col.SetResizable(true)
+	col.SetResizable(false)
 	cl.columnView.AppendColumn(col)
 }
 
