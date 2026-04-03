@@ -57,6 +57,14 @@ type Window struct {
 	// window is the AdwApplicationWindow — the root GTK window.
 	window *adw.ApplicationWindow
 
+	// sidebarPage is the left NavigationPage that contains the sidebar.
+	// We keep a reference to it so we can update the title when a repo is opened.
+	sidebarPage *adw.NavigationPage
+
+	// contentPage is the right NavigationPage that contains the main content area.
+	// We keep a reference to it so we can update the title when a repo is opened.
+	contentPage *adw.NavigationPage
+
 	// toastOverlay wraps the main content and provides a place to show
 	// non-blocking toast notifications (e.g., "Pushed to origin/main").
 	toastOverlay *adw.ToastOverlay
@@ -71,9 +79,6 @@ type Window struct {
 
 	// sidebar is the left sidebar with repositories and branches.
 	sidebar *sidebar.Sidebar
-
-	// sidebarTitle is the label in the sidebar header showing the current repo name.
-	sidebarTitle *gtk.Label
 
 	// commitLog is the commit history table view.
 	commitLog *commitlog.CommitLog
@@ -251,10 +256,6 @@ func (w *Window) buildSidebarHeader() *adw.HeaderBar {
 	cloneBtn.SetTooltipText("Clone Repository")
 	cloneBtn.ConnectClicked(func() { w.onCloneRepository() })
 	header.PackStart(cloneBtn)
-
-	// --- Center: Repository name title ---
-	w.sidebarTitle = gtk.NewLabel("GiTK")
-	header.SetTitleWidget(w.sidebarTitle)
 
 	// --- Right: Primary hamburger menu ---
 	menuBtn := w.buildPrimaryMenu()
@@ -626,11 +627,11 @@ func (w *Window) buildContentArea() {
 	navSplit.SetMaxSidebarWidth(400)
 	navSplit.SetSidebarWidthFraction(0.25)
 
-	sidebarPage := adw.NewNavigationPage(w.sidebar.Root, "Repositories")
-	navSplit.SetSidebar(sidebarPage)
+	w.sidebarPage = adw.NewNavigationPage(w.sidebar.Root, "Repositories")
+	navSplit.SetSidebar(w.sidebarPage)
 
-	contentPage := adw.NewNavigationPage(contentToolbarView, "GiTK")
-	navSplit.SetContent(contentPage)
+	w.contentPage = adw.NewNavigationPage(contentToolbarView, "")
+	navSplit.SetContent(w.contentPage)
 
 	// --- Toast overlay (direct window content — no outer AdwToolbarView) ---
 	w.toastOverlay = adw.NewToastOverlay()
@@ -654,7 +655,8 @@ func (w *Window) onRepoSelected(repo *git.Repository) {
 	w.fileHistoryView.SetRepository(repo)
 	w.rebaseView.SetRepository(repo)
 	w.window.SetTitle(repo.Name())
-	w.sidebarTitle.SetLabel(repo.Name())
+	w.sidebarPage.SetTitle(repo.Name())
+	w.contentPage.SetTitle(repo.Name())
 
 	// Enable remote-operation buttons now that a repo is open.
 	w.fetchBtn.SetSensitive(true)
