@@ -139,6 +139,7 @@ type Sidebar struct {
 //   - cfg: application configuration (for recent repositories list).
 //   - onRepoSelected: callback when a repository is selected.
 //   - onBranchSelected: callback when a branch is selected.
+//
 // SidebarCallbacks groups all optional action callbacks for the sidebar.
 type SidebarCallbacks struct {
 	OnRepoSelected    OnRepoSelected
@@ -379,11 +380,26 @@ func (s *Sidebar) RefreshBranches() {
 	localExpander.SetTitle("Local")
 	localExpander.SetIconName("vcs-branch-symbolic")
 	localExpander.SetExpanded(true)
+	localExpander.SetMarginBottom(12) // expanded by default
+	localExpander.Connect("notify::expanded", func() {
+		if localExpander.Expanded() {
+			localExpander.SetMarginBottom(12)
+		} else {
+			localExpander.SetMarginBottom(0)
+		}
+	})
 
 	remoteExpander := adw.NewExpanderRow()
 	remoteExpander.SetTitle("Remote")
 	remoteExpander.SetIconName("network-server-symbolic")
 	remoteExpander.SetExpanded(false)
+	remoteExpander.Connect("notify::expanded", func() {
+		if remoteExpander.Expanded() {
+			remoteExpander.SetMarginBottom(12)
+		} else {
+			remoteExpander.SetMarginBottom(0)
+		}
+	})
 
 	// "Add Remote" button on the Remote branches expander header.
 	addRemoteBtn := gtk.NewButtonFromIconName("list-add-symbolic")
@@ -445,10 +461,15 @@ func (s *Sidebar) RefreshBranches() {
 		// Add Up/Down reorder buttons.
 		s.addReorderButtons(row, branchName, idx, len(localBranches))
 
+		// Add some spacing at the end of the list.
+		if i == len(localBranches) - 1 {
+			row.SetMarginBottom(12)
+		}
+
 		localExpander.AddRow(row)
 	}
 
-	for _, branch := range remoteBranches {
+	for i, branch := range remoteBranches {
 		branchName := branch.Name
 		row := NewBranchRow(branch, false, BranchActions{})
 		row.ConnectActivated(func() {
@@ -456,6 +477,12 @@ func (s *Sidebar) RefreshBranches() {
 				s.onBranchSelected(branchName, true)
 			}
 		})
+
+		// Add some spacing at the end of the list.
+		if i == len(remoteBranches) - 1 {
+			row.SetMarginBottom(12)
+		}
+
 		remoteExpander.AddRow(row)
 	}
 
@@ -476,8 +503,15 @@ func (s *Sidebar) RefreshBranches() {
 	tagsExpander.SetTitle("Tags")
 	tagsExpander.SetIconName("tag-symbolic")
 	tagsExpander.SetExpanded(false)
+	tagsExpander.Connect("notify::expanded", func() {
+		if tagsExpander.Expanded() {
+			tagsExpander.SetMarginBottom(12)
+		} else {
+			tagsExpander.SetMarginBottom(0)
+		}
+	})
 
-	for _, tag := range tags {
+	for i, tag := range tags {
 		tagName := tag.Name
 		onTagDelete := func() {
 			if s.onTagDelete != nil {
@@ -485,6 +519,12 @@ func (s *Sidebar) RefreshBranches() {
 			}
 		}
 		row := NewTagRow(tag, onTagDelete)
+
+		// Add some spacing at the end of the list.
+		if i == len(tags) - 1 {
+			row.SetMarginBottom(12)
+		}
+
 		tagsExpander.AddRow(row)
 	}
 
@@ -502,6 +542,13 @@ func (s *Sidebar) RefreshBranches() {
 	submodulesExpander.SetIconName("package-x-generic-symbolic")
 	submodulesExpander.SetExpanded(false)
 	submodulesExpander.SetSubtitle(formatCount(len(submodules)))
+	submodulesExpander.Connect("notify::expanded", func() {
+		if submodulesExpander.Expanded() {
+			submodulesExpander.SetMarginBottom(12)
+		} else {
+			submodulesExpander.SetMarginBottom(0)
+		}
+	})
 
 	// "Update All" button.
 	updateSubmodulesBtn := gtk.NewButtonFromIconName("view-refresh-symbolic")
@@ -527,7 +574,7 @@ func (s *Sidebar) RefreshBranches() {
 	})
 	submodulesExpander.AddSuffix(addSubmoduleBtn)
 
-	for _, sm := range submodules {
+	for i, sm := range submodules {
 		smPath := sm.Path
 		smRow := adw.NewActionRow()
 		smRow.SetTitle(sm.Name)
@@ -550,6 +597,11 @@ func (s *Sidebar) RefreshBranches() {
 			}
 		})
 		smRow.AddSuffix(removeBtn)
+
+		// Add some spacing at the end of the list.
+		if i == len(submodules) - 1 {
+			smRow.SetMarginBottom(12)
+		}
 
 		submodulesExpander.AddRow(smRow)
 	}
@@ -595,7 +647,6 @@ func (s *Sidebar) openRepo(path string) {
 		s.onRepoSelected(repo)
 	}
 }
-
 
 // NewRepoRow creates a row for the recent repositories list.
 // It shows the repository name and path.

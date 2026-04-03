@@ -39,8 +39,8 @@ import (
 	"github.com/MedaiP90/GiTK/ui/merge"
 	"github.com/MedaiP90/GiTK/ui/rebase"
 	"github.com/MedaiP90/GiTK/ui/sidebar"
-	"github.com/MedaiP90/GiTK/ui/stash"
 	"github.com/MedaiP90/GiTK/ui/staging"
+	"github.com/MedaiP90/GiTK/ui/stash"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gdk/v4"
 	"github.com/diamondburned/gotk4/pkg/gio/v2"
@@ -60,6 +60,7 @@ type Window struct {
 	// toastOverlay wraps the main content and provides a place to show
 	// non-blocking toast notifications (e.g., "Pushed to origin/main").
 	toastOverlay *adw.ToastOverlay
+	currentToast *adw.Toast
 
 	// contentStack is the AdwViewStack that switches between the main views.
 	// It is connected to an AdwViewSwitcher in the content header bar.
@@ -100,6 +101,9 @@ type Window struct {
 	fetchBtn *gtk.Button
 	pullBtn  *gtk.Button
 	pushBtn  *gtk.Button
+
+	// progressSpinner is shown during remote operations.
+	progressSpinner    *gtk.Spinner
 
 	// stagingPage and stashPage are the AdwViewStackPage handles for the
 	// staging and stash tabs; used to update their badge numbers.
@@ -153,6 +157,9 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 	// --- Load custom CSS ---
 	cssProvider := gtk.NewCSSProvider()
 	cssProvider.LoadFromString(`
+.fetching-spinner {
+  color: @accent_color;
+}
 .current-branch-chip {
 	border-radius: 8px;
 	padding: 1px 7px;
@@ -200,10 +207,15 @@ func (w *Window) Present() {
 //
 // Example: w.ShowToast("Pushed 3 commits to origin/main")
 func (w *Window) ShowToast(message string) {
-	toast := adw.NewToast(message)
+  // If a toast is already visible, dismiss it before showing the new one.
+  if w.currentToast != nil {
+    w.currentToast.Dismiss()
+  }
+  // Create and show the new toast.
+	w.currentToast = adw.NewToast(message)
 	// Toasts auto-dismiss after a few seconds. The default timeout is fine
 	// for most messages.
-	w.toastOverlay.AddToast(toast)
+	w.toastOverlay.AddToast(w.currentToast)
 }
 
 // buildSidebarHeader creates the AdwHeaderBar that lives inside the sidebar's
@@ -251,7 +263,7 @@ func (w *Window) buildSidebarHeader() *adw.HeaderBar {
 //
 // Layout:
 //
-//	  [Log | Staging | Stash]   [⟳ Fetch] [↓ Pull] [↑ Push]
+//	[Log | Staging | Stash]   [⟳ Fetch] [↓ Pull] [↑ Push]
 //
 // The content header hides its start title buttons (mirror of the sidebar
 // header hiding its end title buttons).
@@ -272,21 +284,7 @@ func (w *Window) buildContentHeader(viewStack *adw.ViewStack) *adw.HeaderBar {
 	w.fetchBtn.SetTooltipText("Fetch")
 	w.fetchBtn.SetSensitive(false)
 	w.fetchBtn.ConnectClicked(func() {
-		if w.repo == nil {
-			return
-		}
-		go func() {
-			err := w.repo.Fetch()
-			glib.IdleAdd(func() {
-				if err != nil {
-					w.ShowToast("Fetch failed: " + err.Error())
-					return
-				}
-				w.ShowToast("Fetched from origin")
-				w.sidebar.RefreshBranches()
-				w.commitLog.SetRepository(w.repo)
-			})
-		}()
+		w.doFetch()
 	})
 
 	w.pullBtn = gtk.NewButtonFromIconName("go-down-symbolic")
@@ -298,6 +296,9 @@ func (w *Window) buildContentHeader(viewStack *adw.ViewStack) *adw.HeaderBar {
 				w.ShowToast(msg)
 				if w.repo != nil {
 					w.commitLog.SetRepository(w.repo)
+					if !strings.HasPrefix(msg, "Pull failed") {
+						w.doFetch()
+					}
 				}
 			})
 		}
@@ -310,16 +311,63 @@ func (w *Window) buildContentHeader(viewStack *adw.ViewStack) *adw.HeaderBar {
 		if w.repo != nil {
 			dialogs.ShowPushDialog(w.window, w.repo, func(msg string) {
 				w.ShowToast(msg)
+				if !strings.HasPrefix(msg, "Push failed") {
+					w.doFetch()
+				}
 			})
 		}
 	})
 
+	// Spinner shown during remote operations (to the left of the buttons).
+	w.progressSpinner = gtk.NewSpinner()
+	w.progressSpinner.SetVisible(false)
+	w.progressSpinner.SetVAlign(gtk.AlignCenter)
+	w.progressSpinner.SetMarginEnd(12)
+	w.progressSpinner.SetSpinning(false)
+	w.progressSpinner.SetCSSClasses([]string{"fetching-spinner"})
+
 	bar.PackEnd(w.pushBtn)
 	bar.PackEnd(w.pullBtn)
 	bar.PackEnd(w.fetchBtn)
-
+	bar.PackEnd(w.progressSpinner)
 
 	return bar
+}
+
+// doFetch runs a git fetch in the background with progress indication.
+func (w *Window) doFetch() {
+	if w.repo == nil {
+		return
+	}
+	w.ShowToast("Fetching…")
+	w.startProgress()
+	go func() {
+		err := w.repo.Fetch()
+		glib.IdleAdd(func() {
+			w.stopProgress()
+			if err != nil {
+				w.ShowToast("Fetch failed: " + err.Error())
+				return
+			}
+			w.ShowToast("Fetched from origin")
+			w.sidebar.RefreshBranches()
+			w.commitLog.SetRepository(w.repo)
+		})
+	}()
+}
+
+// startProgress shows and begins pulsing the header progress bar.
+func (w *Window) startProgress() {
+	w.progressSpinner.SetVisible(true)
+	w.progressSpinner.SetSpinning(true)
+	w.progressSpinner.Start()
+}
+
+// stopProgress hides the progress bar and stops the pulse timer.
+func (w *Window) stopProgress() {
+	w.progressSpinner.Stop()
+	w.progressSpinner.SetVisible(false)
+	w.progressSpinner.SetSpinning(false)
 }
 
 // switchToView switches the AdwViewStack to the named child.
@@ -450,7 +498,6 @@ func (w *Window) buildContentArea() {
 	logPane := gtk.NewPaned(gtk.OrientationHorizontal)
 	logPane.SetStartChild(w.commitLog.Root)
 	logPane.SetEndChild(w.commitDetail.Root)
-	logPane.SetPosition(700)
 	logPane.SetResizeStartChild(true)
 	logPane.SetResizeEndChild(false)
 

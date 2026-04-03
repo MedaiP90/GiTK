@@ -36,6 +36,9 @@ type GiTKApp struct {
 	// cfg holds the user's persisted configuration (recent repos, prefs, etc.).
 	cfg *config.Config
 
+	// version is the application version string, injected at build time.
+	version string
+
 	// win is the main application window. It is created on the first
 	// "activate" signal and reused on subsequent activations.
 	win *Window
@@ -49,7 +52,7 @@ type GiTKApp struct {
 //  2. Create an adw.Application with our app ID.
 //  3. Connect the "activate" signal so we create the window on launch.
 //  4. Register global application actions (keyboard shortcuts, menu items).
-func New() *GiTKApp {
+func New(version string) *GiTKApp {
 	// Load configuration from XDG config directory. If the config file does
 	// not exist yet, this returns sensible defaults.
 	cfg, err := config.Load()
@@ -66,8 +69,9 @@ func New() *GiTKApp {
 	gtkApp := adw.NewApplication(AppID, gio.ApplicationFlagsNone)
 
 	gitkApp := &GiTKApp{
-		app: gtkApp,
-		cfg: cfg,
+		app:     gtkApp,
+		cfg:     cfg,
+		version: version,
 	}
 
 	// "activate" is emitted when the application is launched (or when the
@@ -171,7 +175,7 @@ func (a *GiTKApp) showAbout() {
 	about := adw.NewAboutDialog()
 	about.SetApplicationName("GiTK")
 	about.SetApplicationIcon(AppID)
-	about.SetVersion("0.1.0")
+	about.SetVersion(a.version)
 	about.SetDeveloperName("MedaiP90")
 	about.SetWebsite("https://github.com/MedaiP90/GiTK")
 	about.SetIssueURL("https://github.com/MedaiP90/GiTK/issues")

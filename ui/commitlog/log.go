@@ -27,8 +27,8 @@ import (
 	"time"
 
 	"github.com/MedaiP90/GiTK/git"
-	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
+	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
 
@@ -260,7 +260,6 @@ func (cl *CommitLog) setCommits(commits []git.CommitInfo) {
 
 	slog.Debug("commit log updated", "count", len(commits))
 }
-
 
 // applyFilter filters the displayed commits by the search text.
 func (cl *CommitLog) applyFilter(query string) {
@@ -550,7 +549,7 @@ func createRefPill(ref git.GraphRef, currentBranch string) *gtk.Label {
 	case git.RefTag:
 		pill.AddCSSClass("warning")
 	case git.RefHEAD:
-		pill.AddCSSClass("success")
+		pill.AddCSSClass("current-branch-chip")
 	}
 
 	return pill

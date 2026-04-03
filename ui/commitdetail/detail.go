@@ -384,7 +384,7 @@ func (cd *CommitDetail) SetRefs(refs []git.GraphRef) {
 			pill.AddCSSClass("caption")
 			pill.AddCSSClass(g.cssClass)
 			if ref.Kind == git.RefHEAD {
-				pill.AddCSSClass("success")
+				pill.AddCSSClass("current-branch-chip")
 			}
 			flow.Insert(pill, -1)
 		}

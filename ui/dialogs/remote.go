@@ -16,6 +16,38 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
 
+// buildComboRow creates an AdwComboRow populated with the given items and
+// pre-selects the item matching defaultValue (or index 0 if not found).
+func buildComboRow(title string, items []string, defaultValue string) *adw.ComboRow {
+	combo := adw.NewComboRow()
+	combo.SetTitle(title)
+
+	list := gtk.NewStringList(items)
+	combo.SetModel(list)
+
+	for i, item := range items {
+		if item == defaultValue {
+			combo.SetSelected(uint(i))
+			break
+		}
+	}
+
+	return combo
+}
+
+// comboSelectedString returns the currently selected string from a ComboRow
+// that uses a StringList model.
+func comboSelectedString(combo *adw.ComboRow, items []string) string {
+	idx := combo.Selected()
+	if int(idx) < len(items) {
+		return items[idx]
+	}
+	if len(items) > 0 {
+		return items[0]
+	}
+	return ""
+}
+
 // ShowPushDialog shows the push dialog.
 func ShowPushDialog(parent *adw.ApplicationWindow, repo *git.Repository, onDone func(string)) {
 	dialog := adw.NewDialog()
@@ -23,10 +55,11 @@ func ShowPushDialog(parent *adw.ApplicationWindow, repo *git.Repository, onDone 
 	dialog.SetContentWidth(400)
 	dialog.SetContentHeight(250)
 
+	// Collect remote names for the dropdown.
+	remoteNames := getRemoteNames(repo)
+
 	// Remote selector.
-	remoteEntry := adw.NewEntryRow()
-	remoteEntry.SetTitle("Remote")
-	remoteEntry.SetText("origin")
+	remoteCombo := buildComboRow("Remote", remoteNames, "origin")
 
 	// Force push toggle.
 	forceRow := adw.NewSwitchRow()
@@ -35,7 +68,7 @@ func ShowPushDialog(parent *adw.ApplicationWindow, repo *git.Repository, onDone 
 
 	group := adw.NewPreferencesGroup()
 	group.SetTitle("Push to Remote")
-	group.Add(remoteEntry)
+	group.Add(remoteCombo)
 	group.Add(forceRow)
 
 	// Buttons.
@@ -45,7 +78,7 @@ func ShowPushDialog(parent *adw.ApplicationWindow, repo *git.Repository, onDone 
 	pushBtn := gtk.NewButtonWithLabel("Push")
 	pushBtn.AddCSSClass("suggested-action")
 	pushBtn.ConnectClicked(func() {
-		remote := remoteEntry.Text()
+		remote := comboSelectedString(remoteCombo, remoteNames)
 		force := forceRow.Active()
 
 		if force {
@@ -188,18 +221,17 @@ func ShowPullDialog(parent *adw.ApplicationWindow, repo *git.Repository, onDone 
 	dialog.SetContentWidth(400)
 	dialog.SetContentHeight(200)
 
-	remoteEntry := adw.NewEntryRow()
-	remoteEntry.SetTitle("Remote")
-	remoteEntry.SetText("origin")
+	// Collect remote and branch names for the dropdowns.
+	remoteNames := getRemoteNames(repo)
+	branchNames := getLocalBranchNames(repo)
 
-	branchEntry := adw.NewEntryRow()
-	branchEntry.SetTitle("Branch")
-	branchEntry.SetText(repo.CurrentBranch())
+	remoteCombo := buildComboRow("Remote", remoteNames, "origin")
+	branchCombo := buildComboRow("Branch", branchNames, repo.CurrentBranch())
 
 	group := adw.NewPreferencesGroup()
 	group.SetTitle("Pull from Remote")
-	group.Add(remoteEntry)
-	group.Add(branchEntry)
+	group.Add(remoteCombo)
+	group.Add(branchCombo)
 
 	cancelBtn := gtk.NewButtonWithLabel("Cancel")
 	cancelBtn.ConnectClicked(func() { dialog.Close() })
@@ -207,8 +239,8 @@ func ShowPullDialog(parent *adw.ApplicationWindow, repo *git.Repository, onDone 
 	pullBtn := gtk.NewButtonWithLabel("Pull")
 	pullBtn.AddCSSClass("suggested-action")
 	pullBtn.ConnectClicked(func() {
-		remote := remoteEntry.Text()
-		branch := branchEntry.Text()
+		remote := comboSelectedString(remoteCombo, remoteNames)
+		branch := comboSelectedString(branchCombo, branchNames)
 
 		go func() {
 			err := repo.Pull(remote, branch)
@@ -244,4 +276,37 @@ func ShowPullDialog(parent *adw.ApplicationWindow, repo *git.Repository, onDone 
 
 	dialog.SetChild(content)
 	dialog.Present(parent)
+}
+
+// getRemoteNames returns a list of remote names from the repository.
+// Falls back to ["origin"] if remotes cannot be loaded.
+func getRemoteNames(repo *git.Repository) []string {
+	remotes, err := repo.Remotes()
+	if err != nil || len(remotes) == 0 {
+		return []string{"origin"}
+	}
+	names := make([]string, len(remotes))
+	for i, r := range remotes {
+		names[i] = r.Name
+	}
+	return names
+}
+
+// getLocalBranchNames returns a list of local branch names from the repository.
+// Falls back to the current branch name if branches cannot be loaded.
+func getLocalBranchNames(repo *git.Repository) []string {
+	branches, err := repo.Branches()
+	if err != nil || len(branches) == 0 {
+		return []string{repo.CurrentBranch()}
+	}
+	var names []string
+	for _, b := range branches {
+		if !b.IsRemote {
+			names = append(names, b.Name)
+		}
+	}
+	if len(names) == 0 {
+		return []string{repo.CurrentBranch()}
+	}
+	return names
 }

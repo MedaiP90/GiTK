@@ -19,10 +19,14 @@ import (
 	"github.com/MedaiP90/GiTK/app"
 )
 
+// version is set at build time via -ldflags "-X main.version=<ver>".
+// When running without ldflags (e.g. `go run .`) it defaults to "dev".
+var version = "dev"
+
 func main() {
 	// Create the GiTK application. The app package handles all GTK/Adwaita
 	// initialization, window creation, and action registration.
-	application := app.New()
+	application := app.New(version)
 
 	// Run the GTK main loop. os.Args is passed so GTK can process any
 	// command-line flags it recognizes (e.g., --display for X11).
