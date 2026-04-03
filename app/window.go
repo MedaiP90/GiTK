@@ -504,7 +504,7 @@ func (w *Window) buildContentArea() {
 	logToolbarView := adw.NewToolbarView()
 	logToolbarView.SetContent(logPane)
 
-	w.contentStack.AddTitledWithIcon(logToolbarView, "log", "Commit Log", "view-list-symbolic")
+	w.contentStack.AddTitledWithIcon(logToolbarView, "log", "History", "view-list-symbolic")
 
 	// --- Staging view ---
 	w.stagingView = staging.New(w.cfg, func(hash string) {
@@ -615,8 +615,8 @@ func (w *Window) buildContentArea() {
 	// Each NavigationPage owns its own AdwToolbarView + AdwHeaderBar, so
 	// the header bars live *inside* the split view — not above it.
 	navSplit := adw.NewNavigationSplitView()
-	navSplit.SetMinSidebarWidth(200)
-	navSplit.SetMaxSidebarWidth(320)
+	navSplit.SetMinSidebarWidth(300)
+	navSplit.SetMaxSidebarWidth(400)
 	navSplit.SetSidebarWidthFraction(0.25)
 
 	sidebarPage := adw.NewNavigationPage(w.sidebar.Root, "Repositories")
