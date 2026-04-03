@@ -101,9 +101,8 @@ type Window struct {
 	pullBtn  *gtk.Button
 	pushBtn  *gtk.Button
 
-	// progressBar is a pulsing progress bar shown during remote operations.
-	progressBar    *gtk.ProgressBar
-	progressTickID glib.SourceHandle
+	// progressSpinner is shown during remote operations.
+	progressSpinner    *gtk.Spinner
 
 	// stagingPage and stashPage are the AdwViewStackPage handles for the
 	// staging and stash tabs; used to update their badge numbers.
@@ -157,6 +156,9 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 	// --- Load custom CSS ---
 	cssProvider := gtk.NewCSSProvider()
 	cssProvider.LoadFromString(`
+.fetching-spinner {
+  color: @accent_color;
+}
 .current-branch-chip {
 	border-radius: 8px;
 	padding: 1px 7px;
@@ -310,16 +312,18 @@ func (w *Window) buildContentHeader(viewStack *adw.ViewStack) *adw.HeaderBar {
 		}
 	})
 
-	// Progress bar shown during remote operations (to the left of the buttons).
-	w.progressBar = gtk.NewProgressBar()
-	w.progressBar.SetVisible(false)
-	w.progressBar.SetVAlign(gtk.AlignCenter)
-	w.progressBar.SetSizeRequest(80, -1)
+	// Spinner shown during remote operations (to the left of the buttons).
+	w.progressSpinner = gtk.NewSpinner()
+	w.progressSpinner.SetVisible(false)
+	w.progressSpinner.SetVAlign(gtk.AlignCenter)
+	w.progressSpinner.SetMarginEnd(12)
+	w.progressSpinner.SetSpinning(false)
+	w.progressSpinner.SetCSSClasses([]string{"fetching-spinner"})
 
 	bar.PackEnd(w.pushBtn)
 	bar.PackEnd(w.pullBtn)
 	bar.PackEnd(w.fetchBtn)
-	bar.PackEnd(w.progressBar)
+	bar.PackEnd(w.progressSpinner)
 
 	return bar
 }
@@ -348,22 +352,16 @@ func (w *Window) doFetch() {
 
 // startProgress shows and begins pulsing the header progress bar.
 func (w *Window) startProgress() {
-	w.progressBar.SetVisible(true)
-	w.progressBar.Pulse()
-	w.progressTickID = glib.TimeoutAdd(200, func() bool {
-		w.progressBar.Pulse()
-		return true
-	})
+	w.progressSpinner.SetVisible(true)
+	w.progressSpinner.SetSpinning(true)
+	w.progressSpinner.Start()
 }
 
 // stopProgress hides the progress bar and stops the pulse timer.
 func (w *Window) stopProgress() {
-	if w.progressTickID != 0 {
-		glib.SourceRemove(w.progressTickID)
-		w.progressTickID = 0
-	}
-	w.progressBar.SetFraction(0)
-	w.progressBar.SetVisible(false)
+	w.progressSpinner.Stop()
+	w.progressSpinner.SetVisible(false)
+	w.progressSpinner.SetSpinning(false)
 }
 
 // switchToView switches the AdwViewStack to the named child.
@@ -494,7 +492,6 @@ func (w *Window) buildContentArea() {
 	logPane := gtk.NewPaned(gtk.OrientationHorizontal)
 	logPane.SetStartChild(w.commitLog.Root)
 	logPane.SetEndChild(w.commitDetail.Root)
-	logPane.SetPosition(700)
 	logPane.SetResizeStartChild(true)
 	logPane.SetResizeEndChild(false)
 
