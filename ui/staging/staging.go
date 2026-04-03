@@ -227,7 +227,7 @@ func (sv *StagingView) build() {
 	paned := gtk.NewPaned(gtk.OrientationHorizontal)
 	paned.SetStartChild(fileScrolled)
 	paned.SetEndChild(sv.hunkView.Root)
-	paned.SetPosition(350)
+	paned.SetPosition(500)
 	paned.SetShrinkStartChild(false)
 	paned.SetShrinkEndChild(false)
 

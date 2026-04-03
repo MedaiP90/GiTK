@@ -127,6 +127,7 @@ func (cl *CommitLog) build() {
 	cl.columnView.SetShowRowSeparators(true)
 	cl.columnView.SetShowColumnSeparators(false)
 	cl.columnView.SetVExpand(true)
+	cl.columnView.SetHExpand(true)
 	// Disable column reordering — the column order is fixed by design.
 	cl.columnView.SetReorderable(false)
 
@@ -174,8 +175,9 @@ func (cl *CommitLog) build() {
 
 	tableArea := gtk.NewBox(gtk.OrientationHorizontal, 0)
 	tableArea.Append(tableScrolled)
-	tableArea.SetVExpand(true)
+	tableArea.SetMarginTop(6)
 	tableArea.SetHExpand(true)
+	tableArea.SetVExpand(true)
 
 	// Root is the vertical box (search bar on top, table below).
 	// The parent layout (window.go) places this as the start child
@@ -407,8 +409,9 @@ func (cl *CommitLog) addSubjectColumn() {
 	})
 
 	col := gtk.NewColumnViewColumn("Subject", &factory.ListItemFactory)
-	col.SetFixedWidth(400)
+	col.SetFixedWidth(300)
 	col.SetResizable(true)
+	col.SetExpand(true)
 	cl.columnView.AppendColumn(col)
 }
 
@@ -521,7 +524,6 @@ func (cl *CommitLog) addRefsColumn() {
 	})
 
 	col := gtk.NewColumnViewColumn("Refs", &factory.ListItemFactory)
-	col.SetFixedWidth(200)
 	col.SetResizable(true)
 	cl.columnView.AppendColumn(col)
 }
