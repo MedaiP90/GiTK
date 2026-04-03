@@ -227,7 +227,7 @@ func (sv *StagingView) build() {
 	paned := gtk.NewPaned(gtk.OrientationHorizontal)
 	paned.SetStartChild(fileScrolled)
 	paned.SetEndChild(sv.hunkView.Root)
-	paned.SetPosition(350)
+	paned.SetPosition(500)
 	paned.SetShrinkStartChild(false)
 	paned.SetShrinkEndChild(false)
 
@@ -340,7 +340,7 @@ func (sv *StagingView) generateAICommitMessage() {
 		return
 	}
 
-	client := ai.NewClient(sv.cfg.AI.APIKey, sv.cfg.AI.Model)
+	client := ai.NewProvider(sv.cfg.AI)
 	if client == nil {
 		sv.showToast("AI not configured. Set API key in Preferences.")
 		return

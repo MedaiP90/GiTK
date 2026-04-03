@@ -115,6 +115,72 @@ func showForceConfirmation(parent *adw.ApplicationWindow, onConfirm func()) {
 	dialog.Present(parent)
 }
 
+// ShowAddRemoteDialog shows a dialog to add a new git remote.
+func ShowAddRemoteDialog(parent *adw.ApplicationWindow, repo *git.Repository, onDone func(string)) {
+	dialog := adw.NewDialog()
+	dialog.SetTitle("Add Remote")
+	dialog.SetContentWidth(420)
+	dialog.SetContentHeight(220)
+
+	nameEntry := adw.NewEntryRow()
+	nameEntry.SetTitle("Name")
+	nameEntry.SetText("origin")
+
+	urlEntry := adw.NewEntryRow()
+	urlEntry.SetTitle("URL")
+
+	group := adw.NewPreferencesGroup()
+	group.SetTitle("New Remote")
+	group.Add(nameEntry)
+	group.Add(urlEntry)
+
+	cancelBtn := gtk.NewButtonWithLabel("Cancel")
+	cancelBtn.ConnectClicked(func() { dialog.Close() })
+
+	addBtn := gtk.NewButtonWithLabel("Add Remote")
+	addBtn.AddCSSClass("suggested-action")
+	addBtn.ConnectClicked(func() {
+		name := nameEntry.Text()
+		url := urlEntry.Text()
+		if name == "" || url == "" {
+			return
+		}
+		go func() {
+			err := repo.AddRemote(name, url)
+			glib.IdleAdd(func() {
+				dialog.Close()
+				if err != nil {
+					slog.Warn("add remote failed", "name", name, "error", err)
+					if onDone != nil {
+						onDone("Add remote failed: " + err.Error())
+					}
+					return
+				}
+				if onDone != nil {
+					onDone("Remote '" + name + "' added")
+				}
+			})
+		}()
+	})
+
+	btnBox := gtk.NewBox(gtk.OrientationHorizontal, 12)
+	btnBox.SetHAlign(gtk.AlignEnd)
+	btnBox.SetMarginTop(18)
+	btnBox.Append(cancelBtn)
+	btnBox.Append(addBtn)
+
+	content := gtk.NewBox(gtk.OrientationVertical, 0)
+	content.SetMarginTop(24)
+	content.SetMarginBottom(24)
+	content.SetMarginStart(24)
+	content.SetMarginEnd(24)
+	content.Append(group)
+	content.Append(btnBox)
+
+	dialog.SetChild(content)
+	dialog.Present(parent)
+}
+
 // ShowPullDialog shows the pull dialog.
 func ShowPullDialog(parent *adw.ApplicationWindow, repo *git.Repository, onDone func(string)) {
 	dialog := adw.NewDialog()

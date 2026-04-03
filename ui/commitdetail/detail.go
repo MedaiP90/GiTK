@@ -53,6 +53,12 @@ type CommitDetail struct {
 	// commit is the currently displayed commit.
 	commit *git.CommitInfo
 
+	// onShowBlame is called when the user wants to blame a file.
+	onShowBlame func(path, commitHash string)
+
+	// onShowFileHistory is called when the user wants to see a file's history.
+	onShowFileHistory func(path string)
+
 	// hashRow shows the full commit hash.
 	hashRow *adw.ActionRow
 
@@ -65,8 +71,8 @@ type CommitDetail struct {
 	// messageLabel shows the full commit message.
 	messageLabel *gtk.Label
 
-	// refsBox shows branches/tags attached to the commit.
-	refsBox *gtk.Box
+	// refsContainer holds the grouped refs (Local / Remote / Tags) with wrapping.
+	refsContainer *gtk.Box
 
 	// refsGroup is the refs section (hidden when no refs).
 	refsGroup *adw.PreferencesGroup
@@ -120,9 +126,21 @@ func (cd *CommitDetail) build() {
 	cd.infoGroup = adw.NewPreferencesGroup()
 	cd.infoGroup.SetTitle("Commit")
 
-	// Actions menu button in the header area — for tag creation etc.
+	// Actions menu button in the header area — for tag creation, reset, etc.
 	actionsMenu := gio.NewMenu()
 	actionsMenu.Append("Create Tag on this Commit…", "detail.create-tag")
+	actionsMenu.Append("Create Branch from here…", "detail.create-branch")
+	actionsMenu.Append("Cherry-pick onto Current Branch…", "detail.cherry-pick")
+
+	rebaseSection := gio.NewMenu()
+	rebaseSection.Append("Interactive Rebase from here…", "detail.rebase")
+	actionsMenu.AppendSection("Rebase", rebaseSection)
+
+	resetSection := gio.NewMenu()
+	resetSection.Append("Reset Soft to Here…", "detail.reset-soft")
+	resetSection.Append("Reset Mixed to Here…", "detail.reset-mixed")
+	resetSection.Append("Reset Hard to Here…", "detail.reset-hard")
+	actionsMenu.AppendSection("Reset", resetSection)
 
 	cd.actionsBtn = gtk.NewMenuButton()
 	cd.actionsBtn.SetIconName("view-more-symbolic")
@@ -167,14 +185,13 @@ func (cd *CommitDetail) build() {
 	// --- Refs (branches/tags) section ---
 	cd.refsGroup = adw.NewPreferencesGroup()
 	cd.refsGroup.SetTitle("Refs")
-	cd.refsBox = gtk.NewBox(gtk.OrientationHorizontal, 6)
-	cd.refsBox.SetMarginTop(6)
-	cd.refsBox.SetMarginBottom(6)
-	cd.refsBox.SetMarginStart(12)
-	cd.refsBox.SetMarginEnd(12)
-	cd.refsBox.SetHExpand(true)
-	// Use a flow-like wrapping via GtkFlowBox-style approach.
-	cd.refsGroup.Add(cd.refsBox)
+	cd.refsContainer = gtk.NewBox(gtk.OrientationVertical, 4)
+	cd.refsContainer.SetMarginTop(6)
+	cd.refsContainer.SetMarginBottom(6)
+	cd.refsContainer.SetMarginStart(12)
+	cd.refsContainer.SetMarginEnd(12)
+	cd.refsContainer.SetHExpand(true)
+	cd.refsGroup.Add(cd.refsContainer)
 	cd.refsGroup.SetVisible(false) // Hidden until a commit with refs is shown.
 	cd.contentBox.Append(cd.refsGroup)
 
@@ -210,22 +227,77 @@ func (cd *CommitDetail) build() {
 	cd.Root.SetChild(cd.contentBox)
 	cd.Root.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
 
-	// Register the "detail.create-tag" action on the scrolled window.
+	// Register actions on the scrolled window.
+	actionGroup := gio.NewSimpleActionGroup()
+
 	tagAction := gio.NewSimpleAction("create-tag", nil)
 	tagAction.ConnectActivate(func(param *glib.Variant) {
 		if cd.commit != nil {
-			// Activate the window-level create-tag action with the commit hash.
 			cd.Root.ActivateAction("win.create-tag", glib.NewVariantString(cd.commit.Hash))
 		}
 	})
-	actionGroup := gio.NewSimpleActionGroup()
 	actionGroup.AddAction(tagAction)
+
+	createBranchAction := gio.NewSimpleAction("create-branch", nil)
+	createBranchAction.ConnectActivate(func(param *glib.Variant) {
+		if cd.commit != nil {
+			cd.Root.ActivateAction("win.create-branch", glib.NewVariantString(cd.commit.Hash))
+		}
+	})
+	actionGroup.AddAction(createBranchAction)
+
+	resetSoftAction := gio.NewSimpleAction("reset-soft", nil)
+	resetSoftAction.ConnectActivate(func(param *glib.Variant) {
+		if cd.commit != nil {
+			cd.Root.ActivateAction("win.reset-soft", glib.NewVariantString(cd.commit.Hash))
+		}
+	})
+	actionGroup.AddAction(resetSoftAction)
+
+	resetMixedAction := gio.NewSimpleAction("reset-mixed", nil)
+	resetMixedAction.ConnectActivate(func(param *glib.Variant) {
+		if cd.commit != nil {
+			cd.Root.ActivateAction("win.reset-mixed", glib.NewVariantString(cd.commit.Hash))
+		}
+	})
+	actionGroup.AddAction(resetMixedAction)
+
+	resetHardAction := gio.NewSimpleAction("reset-hard", nil)
+	resetHardAction.ConnectActivate(func(param *glib.Variant) {
+		if cd.commit != nil {
+			cd.Root.ActivateAction("win.reset-hard", glib.NewVariantString(cd.commit.Hash))
+		}
+	})
+	actionGroup.AddAction(resetHardAction)
+
+	cherryPickAction := gio.NewSimpleAction("cherry-pick", nil)
+	cherryPickAction.ConnectActivate(func(param *glib.Variant) {
+		if cd.commit != nil {
+			cd.Root.ActivateAction("win.cherry-pick", glib.NewVariantString(cd.commit.Hash))
+		}
+	})
+	actionGroup.AddAction(cherryPickAction)
+
+	rebaseAction := gio.NewSimpleAction("rebase", nil)
+	rebaseAction.ConnectActivate(func(param *glib.Variant) {
+		if cd.commit != nil {
+			cd.Root.ActivateAction("win.rebase", glib.NewVariantString(cd.commit.Hash))
+		}
+	})
+	actionGroup.AddAction(rebaseAction)
+
 	cd.Root.InsertActionGroup("detail", actionGroup)
 }
 
 // SetRepository sets the current repository for diff computation.
 func (cd *CommitDetail) SetRepository(repo *git.Repository) {
 	cd.repo = repo
+}
+
+// SetFileCallbacks sets the callbacks for blame and file history navigation.
+func (cd *CommitDetail) SetFileCallbacks(onBlame func(path, hash string), onHistory func(path string)) {
+	cd.onShowBlame = onBlame
+	cd.onShowFileHistory = onHistory
 }
 
 // SetCommit loads and displays the details of a commit.
@@ -254,9 +326,9 @@ func (cd *CommitDetail) SetCommit(commit git.CommitInfo) {
 
 // SetRefs displays the branches and tags attached to the current commit.
 func (cd *CommitDetail) SetRefs(refs []git.GraphRef) {
-	// Clear existing pills.
-	for child := cd.refsBox.FirstChild(); child != nil; child = cd.refsBox.FirstChild() {
-		cd.refsBox.Remove(child)
+	// Clear existing content.
+	for child := cd.refsContainer.FirstChild(); child != nil; child = cd.refsContainer.FirstChild() {
+		cd.refsContainer.Remove(child)
 	}
 
 	if len(refs) == 0 {
@@ -264,22 +336,60 @@ func (cd *CommitDetail) SetRefs(refs []git.GraphRef) {
 		return
 	}
 
+	// Bucket refs by kind.
+	type refGroup struct {
+		label    string
+		cssClass string
+		refs     []git.GraphRef
+	}
+	groups := []refGroup{
+		{label: "Local", cssClass: "accent"},
+		{label: "Remote", cssClass: "dim-label"},
+		{label: "Tags", cssClass: "warning"},
+	}
 	for _, ref := range refs {
-		pill := gtk.NewLabel(ref.Name)
-		pill.AddCSSClass("caption")
-
 		switch ref.Kind {
-		case git.RefLocalBranch:
-			pill.AddCSSClass("accent")
+		case git.RefLocalBranch, git.RefHEAD:
+			groups[0].refs = append(groups[0].refs, ref)
 		case git.RefRemoteBranch:
-			pill.AddCSSClass("dim-label")
+			groups[1].refs = append(groups[1].refs, ref)
 		case git.RefTag:
-			pill.AddCSSClass("warning")
-		case git.RefHEAD:
-			pill.AddCSSClass("success")
+			groups[2].refs = append(groups[2].refs, ref)
+		}
+	}
+
+	for _, g := range groups {
+		if len(g.refs) == 0 {
+			continue
 		}
 
-		cd.refsBox.Append(pill)
+		// Section label.
+		sectionLabel := gtk.NewLabel(g.label)
+		sectionLabel.AddCSSClass("dim-label")
+		sectionLabel.AddCSSClass("caption")
+		sectionLabel.SetXAlign(0)
+		cd.refsContainer.Append(sectionLabel)
+
+		// FlowBox for pill wrapping.
+		flow := gtk.NewFlowBox()
+		flow.SetSelectionMode(gtk.SelectionNone)
+		flow.SetMaxChildrenPerLine(30)
+		flow.SetMinChildrenPerLine(1)
+		flow.SetColumnSpacing(4)
+		flow.SetRowSpacing(4)
+		flow.SetHExpand(true)
+
+		for _, ref := range g.refs {
+			pill := gtk.NewLabel(ref.Name)
+			pill.AddCSSClass("caption")
+			pill.AddCSSClass(g.cssClass)
+			if ref.Kind == git.RefHEAD {
+				pill.AddCSSClass("success")
+			}
+			flow.Insert(pill, -1)
+		}
+
+		cd.refsContainer.Append(flow)
 	}
 
 	cd.refsGroup.SetVisible(true)
@@ -368,12 +478,39 @@ func (cd *CommitDetail) createExpandableFileRow(diff git.DiffResult) *gtk.ListBo
 	nameLabel.SetHExpand(true)
 	headerBox.Append(nameLabel)
 
+	// Capture path early so closures below can reference it.
+	filePath := diff.NewPath
+
 	// Stats.
 	statsLabel := gtk.NewLabel(fmt.Sprintf("+%d -%d", diff.Stats.Additions, diff.Stats.Deletions))
 	statsLabel.AddCSSClass("dim-label")
 	statsLabel.AddCSSClass("caption")
 	statsLabel.SetVAlign(gtk.AlignCenter)
 	headerBox.Append(statsLabel)
+
+	// Blame button.
+	blameBtn := gtk.NewButtonFromIconName("user-info-symbolic")
+	blameBtn.SetTooltipText("Blame this file")
+	blameBtn.AddCSSClass("flat")
+	blameBtn.SetVAlign(gtk.AlignCenter)
+	blameBtn.ConnectClicked(func() {
+		if cd.onShowBlame != nil && cd.commit != nil {
+			cd.onShowBlame(filePath, cd.commit.Hash)
+		}
+	})
+	headerBox.Append(blameBtn)
+
+	// File history button.
+	historyBtn := gtk.NewButtonFromIconName("document-open-recent-symbolic")
+	historyBtn.SetTooltipText("File history")
+	historyBtn.AddCSSClass("flat")
+	historyBtn.SetVAlign(gtk.AlignCenter)
+	historyBtn.ConnectClicked(func() {
+		if cd.onShowFileHistory != nil {
+			cd.onShowFileHistory(filePath)
+		}
+	})
+	headerBox.Append(historyBtn)
 
 	outerBox.Append(headerBox)
 
@@ -391,7 +528,6 @@ func (cd *CommitDetail) createExpandableFileRow(diff git.DiffResult) *gtk.ListBo
 	outerBox.Append(diffBox)
 
 	// Toggle expand/collapse on row activation.
-	filePath := diff.NewPath
 	row.SetChild(outerBox)
 
 	// Use a click gesture on the header to toggle.

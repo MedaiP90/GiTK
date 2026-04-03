@@ -45,6 +45,30 @@ type OnBranchSelected func(branchName string, isRemote bool)
 // is found to be deleted from the filesystem and removed from the list.
 type OnRepoRemoved func(path string)
 
+// OnBranchDelete is a callback invoked when the user requests to delete a local branch.
+type OnBranchDelete func(branchName string)
+
+// OnTagDelete is a callback invoked when the user requests to delete a tag.
+type OnTagDelete func(tagName string)
+
+// OnBranchMerge is a callback invoked when the user requests to merge a branch into the current one.
+type OnBranchMerge func(branchName string)
+
+// OnBranchRebase is a callback invoked when the user wants to rebase the current branch onto the selected one.
+type OnBranchRebase func(branchName string)
+
+// OnAddRemote is a callback invoked when the user wants to add a new remote.
+type OnAddRemote func()
+
+// OnSubmoduleAdd is a callback invoked when the user wants to add a new submodule.
+type OnSubmoduleAdd func()
+
+// OnSubmoduleRemove is a callback invoked when the user wants to remove a submodule.
+type OnSubmoduleRemove func(path string)
+
+// OnSubmoduleUpdate is a callback invoked when the user wants to update all submodules.
+type OnSubmoduleUpdate func()
+
 // Sidebar is the left sidebar widget. It shows repositories and branches.
 type Sidebar struct {
 	// Root is the top-level widget to embed in the NavigationSplitView.
@@ -64,6 +88,30 @@ type Sidebar struct {
 
 	// onRepoRemoved is called when a repo is found to be deleted.
 	onRepoRemoved OnRepoRemoved
+
+	// onBranchDelete is called when the user requests to delete a local branch.
+	onBranchDelete OnBranchDelete
+
+	// onTagDelete is called when the user requests to delete a tag.
+	onTagDelete OnTagDelete
+
+	// onBranchMerge is called when the user requests to merge a branch into the current one.
+	onBranchMerge OnBranchMerge
+
+	// onBranchRebase is called when the user requests to rebase onto a branch.
+	onBranchRebase OnBranchRebase
+
+	// onAddRemote is called when the user wants to add a new remote.
+	onAddRemote OnAddRemote
+
+	// onSubmoduleAdd is called when the user wants to add a new submodule.
+	onSubmoduleAdd OnSubmoduleAdd
+
+	// onSubmoduleRemove is called when the user wants to remove a submodule.
+	onSubmoduleRemove OnSubmoduleRemove
+
+	// onSubmoduleUpdate is called when the user wants to update all submodules.
+	onSubmoduleUpdate OnSubmoduleUpdate
 
 	// recentListBox shows recently opened repositories.
 	recentListBox *gtk.ListBox
@@ -91,12 +139,35 @@ type Sidebar struct {
 //   - cfg: application configuration (for recent repositories list).
 //   - onRepoSelected: callback when a repository is selected.
 //   - onBranchSelected: callback when a branch is selected.
-func New(cfg *config.Config, onRepoSelected OnRepoSelected, onBranchSelected OnBranchSelected, onRepoRemoved OnRepoRemoved) *Sidebar {
+// SidebarCallbacks groups all optional action callbacks for the sidebar.
+type SidebarCallbacks struct {
+	OnRepoSelected    OnRepoSelected
+	OnBranchSelected  OnBranchSelected
+	OnRepoRemoved     OnRepoRemoved
+	OnBranchDelete    OnBranchDelete
+	OnTagDelete       OnTagDelete
+	OnBranchMerge     OnBranchMerge
+	OnBranchRebase    OnBranchRebase
+	OnAddRemote       OnAddRemote
+	OnSubmoduleAdd    OnSubmoduleAdd
+	OnSubmoduleRemove OnSubmoduleRemove
+	OnSubmoduleUpdate OnSubmoduleUpdate
+}
+
+func New(cfg *config.Config, cb SidebarCallbacks) *Sidebar {
 	s := &Sidebar{
-		cfg:              cfg,
-		onRepoSelected:   onRepoSelected,
-		onBranchSelected: onBranchSelected,
-		onRepoRemoved:    onRepoRemoved,
+		cfg:               cfg,
+		onRepoSelected:    cb.OnRepoSelected,
+		onBranchSelected:  cb.OnBranchSelected,
+		onRepoRemoved:     cb.OnRepoRemoved,
+		onBranchDelete:    cb.OnBranchDelete,
+		onTagDelete:       cb.OnTagDelete,
+		onBranchMerge:     cb.OnBranchMerge,
+		onBranchRebase:    cb.OnBranchRebase,
+		onAddRemote:       cb.OnAddRemote,
+		onSubmoduleAdd:    cb.OnSubmoduleAdd,
+		onSubmoduleRemove: cb.OnSubmoduleRemove,
+		onSubmoduleUpdate: cb.OnSubmoduleUpdate,
 	}
 
 	s.build()
@@ -105,13 +176,6 @@ func New(cfg *config.Config, onRepoSelected OnRepoSelected, onBranchSelected OnB
 
 // build constructs all the sidebar widgets.
 func (s *Sidebar) build() {
-	// --- Header bar for the sidebar ---
-	// Hide window control buttons since the main window header already has them.
-	header := adw.NewHeaderBar()
-	header.SetShowTitle(true)
-	header.SetShowStartTitleButtons(false)
-	header.SetShowEndTitleButtons(false)
-
 	// --- Main content ---
 	s.contentBox = gtk.NewBox(gtk.OrientationVertical, 0)
 
@@ -128,8 +192,9 @@ func (s *Sidebar) build() {
 	scrolled.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
 
 	// --- Assemble into AdwToolbarView ---
+	// No internal header bar — the sidebar merges visually with the main
+	// application toolbar (GNOME HIG sidebar pattern).
 	s.Root = adw.NewToolbarView()
-	s.Root.AddTopBar(header)
 	s.Root.SetContent(scrolled)
 }
 
@@ -241,6 +306,20 @@ func (s *Sidebar) RefreshRecent() {
 			s.openRepo(repoPath)
 		})
 
+		// Remove button — lets users manually remove a repo from the recent list.
+		removeBtn := gtk.NewButtonFromIconName("list-remove-symbolic")
+		removeBtn.SetTooltipText("Remove from recent")
+		removeBtn.AddCSSClass("flat")
+		removeBtn.SetVAlign(gtk.AlignCenter)
+		removeBtn.ConnectClicked(func() {
+			s.cfg.RemoveRecentRepository(repoPath)
+			if err := s.cfg.Save(); err != nil {
+				slog.Warn("failed to save config after removing recent repo", "error", err)
+			}
+			s.RefreshRecent()
+		})
+		row.AddSuffix(removeBtn)
+
 		// Check if repo is dirty (has uncommitted changes) in background.
 		go func(p string, r *adw.ActionRow) {
 			repo, err := git.OpenRepository(p)
@@ -306,32 +385,82 @@ func (s *Sidebar) RefreshBranches() {
 	remoteExpander.SetIconName("network-server-symbolic")
 	remoteExpander.SetExpanded(false)
 
-	localCount := 0
-	remoteCount := 0
+	// "Add Remote" button on the Remote branches expander header.
+	addRemoteBtn := gtk.NewButtonFromIconName("list-add-symbolic")
+	addRemoteBtn.SetTooltipText("Add Remote")
+	addRemoteBtn.AddCSSClass("flat")
+	addRemoteBtn.SetVAlign(gtk.AlignCenter)
+	addRemoteBtn.ConnectClicked(func() {
+		if s.onAddRemote != nil {
+			s.onAddRemote()
+		}
+	})
+	remoteExpander.AddSuffix(addRemoteBtn)
 
-	for _, branch := range branches {
-		row := NewBranchRow(branch, branch.Name == currentBranch)
-
-		// Wire click to trigger branch checkout.
-		branchName := branch.Name
-		isRemote := branch.IsRemote
-		row.ConnectActivated(func() {
-			if s.onBranchSelected != nil {
-				s.onBranchSelected(branchName, isRemote)
-			}
-		})
-
-		if branch.IsRemote {
-			remoteExpander.AddRow(row)
-			remoteCount++
+	// Separate local and remote branches.
+	var localBranches []git.BranchInfo
+	var remoteBranches []git.BranchInfo
+	for _, b := range branches {
+		if b.IsRemote {
+			remoteBranches = append(remoteBranches, b)
 		} else {
-			localExpander.AddRow(row)
-			localCount++
+			localBranches = append(localBranches, b)
 		}
 	}
 
-	localExpander.SetSubtitle(formatCount(localCount))
-	remoteExpander.SetSubtitle(formatCount(remoteCount))
+	// Sort local branches by cfg.BranchOrder, then alphabetically.
+	localBranches = s.sortBranchesByOrder(localBranches)
+
+	for i, branch := range localBranches {
+		isCurrent := branch.Name == currentBranch
+		branchName := branch.Name
+		idx := i
+
+		var actions BranchActions
+		if !isCurrent {
+			actions.OnDelete = func() {
+				if s.onBranchDelete != nil {
+					s.onBranchDelete(branchName)
+				}
+			}
+			actions.OnMerge = func() {
+				if s.onBranchMerge != nil {
+					s.onBranchMerge(branchName)
+				}
+			}
+			actions.OnRebase = func() {
+				if s.onBranchRebase != nil {
+					s.onBranchRebase(branchName)
+				}
+			}
+		}
+
+		row := NewBranchRow(branch, isCurrent, actions)
+		row.ConnectActivated(func() {
+			if s.onBranchSelected != nil {
+				s.onBranchSelected(branchName, false)
+			}
+		})
+
+		// Add Up/Down reorder buttons.
+		s.addReorderButtons(row, branchName, idx, len(localBranches))
+
+		localExpander.AddRow(row)
+	}
+
+	for _, branch := range remoteBranches {
+		branchName := branch.Name
+		row := NewBranchRow(branch, false, BranchActions{})
+		row.ConnectActivated(func() {
+			if s.onBranchSelected != nil {
+				s.onBranchSelected(branchName, true)
+			}
+		})
+		remoteExpander.AddRow(row)
+	}
+
+	localExpander.SetSubtitle(formatCount(len(localBranches)))
+	remoteExpander.SetSubtitle(formatCount(len(remoteBranches)))
 
 	s.branchListBox.Append(localExpander)
 	s.branchListBox.Append(remoteExpander)
@@ -349,12 +478,84 @@ func (s *Sidebar) RefreshBranches() {
 	tagsExpander.SetExpanded(false)
 
 	for _, tag := range tags {
-		row := NewTagRow(tag)
+		tagName := tag.Name
+		onTagDelete := func() {
+			if s.onTagDelete != nil {
+				s.onTagDelete(tagName)
+			}
+		}
+		row := NewTagRow(tag, onTagDelete)
 		tagsExpander.AddRow(row)
 	}
 
 	tagsExpander.SetSubtitle(formatCount(len(tags)))
 	s.branchListBox.Append(tagsExpander)
+
+	// Load submodules (between tags and remotes).
+	submodules, err := s.repo.Submodules()
+	if err != nil {
+		slog.Warn("failed to load submodules", "error", err)
+	}
+
+	submodulesExpander := adw.NewExpanderRow()
+	submodulesExpander.SetTitle("Submodules")
+	submodulesExpander.SetIconName("package-x-generic-symbolic")
+	submodulesExpander.SetExpanded(false)
+	submodulesExpander.SetSubtitle(formatCount(len(submodules)))
+
+	// "Update All" button.
+	updateSubmodulesBtn := gtk.NewButtonFromIconName("view-refresh-symbolic")
+	updateSubmodulesBtn.SetTooltipText("Update All Submodules")
+	updateSubmodulesBtn.AddCSSClass("flat")
+	updateSubmodulesBtn.SetVAlign(gtk.AlignCenter)
+	updateSubmodulesBtn.ConnectClicked(func() {
+		if s.onSubmoduleUpdate != nil {
+			s.onSubmoduleUpdate()
+		}
+	})
+	submodulesExpander.AddSuffix(updateSubmodulesBtn)
+
+	// "Add Submodule" button.
+	addSubmoduleBtn := gtk.NewButtonFromIconName("list-add-symbolic")
+	addSubmoduleBtn.SetTooltipText("Add Submodule")
+	addSubmoduleBtn.AddCSSClass("flat")
+	addSubmoduleBtn.SetVAlign(gtk.AlignCenter)
+	addSubmoduleBtn.ConnectClicked(func() {
+		if s.onSubmoduleAdd != nil {
+			s.onSubmoduleAdd()
+		}
+	})
+	submodulesExpander.AddSuffix(addSubmoduleBtn)
+
+	for _, sm := range submodules {
+		smPath := sm.Path
+		smRow := adw.NewActionRow()
+		smRow.SetTitle(sm.Name)
+		subtitle := sm.Path
+		if sm.URL != "" {
+			subtitle = sm.Path + " — " + sm.URL
+		}
+		smRow.SetSubtitle(subtitle)
+		smRow.SetIconName("package-x-generic-symbolic")
+
+		// Remove button.
+		removeBtn := gtk.NewButtonFromIconName("edit-delete-symbolic")
+		removeBtn.SetTooltipText("Remove Submodule")
+		removeBtn.AddCSSClass("flat")
+		removeBtn.AddCSSClass("error")
+		removeBtn.SetVAlign(gtk.AlignCenter)
+		removeBtn.ConnectClicked(func() {
+			if s.onSubmoduleRemove != nil {
+				s.onSubmoduleRemove(smPath)
+			}
+		})
+		smRow.AddSuffix(removeBtn)
+
+		submodulesExpander.AddRow(smRow)
+	}
+
+	s.branchListBox.Append(submodulesExpander)
+
 }
 
 // openRepo opens a repository at the given path and notifies the callback.
@@ -416,6 +617,121 @@ func NewRepoRow(path string) *adw.ActionRow {
 	row.SetActivatable(true)
 
 	return row
+}
+
+// sortBranchesByOrder returns local branches sorted by cfg.BranchOrder,
+// with any remaining branches appended in their original order.
+func (s *Sidebar) sortBranchesByOrder(branches []git.BranchInfo) []git.BranchInfo {
+	order := s.cfg.BranchOrder
+	if len(order) == 0 {
+		return branches
+	}
+
+	// Build a position map from the config order.
+	pos := make(map[string]int, len(order))
+	for i, name := range order {
+		pos[name] = i
+	}
+
+	// Stable-sort: ordered branches first, then the rest.
+	ordered := make([]git.BranchInfo, 0, len(branches))
+	unordered := make([]git.BranchInfo, 0)
+
+	// Use a slice to preserve BranchOrder sequence.
+	orderedMap := make(map[string]git.BranchInfo)
+	for _, b := range branches {
+		if _, ok := pos[b.Name]; ok {
+			orderedMap[b.Name] = b
+		} else {
+			unordered = append(unordered, b)
+		}
+	}
+	for _, name := range order {
+		if b, ok := orderedMap[name]; ok {
+			ordered = append(ordered, b)
+		}
+	}
+
+	return append(ordered, unordered...)
+}
+
+// addReorderButtons adds Up and Down suffix buttons to a branch row so the
+// user can reorder local branches. The order is persisted in cfg.BranchOrder.
+func (s *Sidebar) addReorderButtons(row interface{ AddSuffix(gtk.Widgetter) }, branchName string, idx, total int) {
+	upBtn := gtk.NewButtonFromIconName("go-up-symbolic")
+	upBtn.SetTooltipText("Move up")
+	upBtn.AddCSSClass("flat")
+	upBtn.SetVAlign(gtk.AlignCenter)
+	upBtn.SetSensitive(idx > 0)
+	upBtn.ConnectClicked(func() {
+		s.moveBranch(branchName, -1)
+	})
+
+	downBtn := gtk.NewButtonFromIconName("go-down-symbolic")
+	downBtn.SetTooltipText("Move down")
+	downBtn.AddCSSClass("flat")
+	downBtn.SetVAlign(gtk.AlignCenter)
+	downBtn.SetSensitive(idx < total-1)
+	downBtn.ConnectClicked(func() {
+		s.moveBranch(branchName, +1)
+	})
+
+	row.AddSuffix(upBtn)
+	row.AddSuffix(downBtn)
+}
+
+// moveBranch moves branchName by delta (+1 down, -1 up) in cfg.BranchOrder
+// and refreshes the branch list.
+func (s *Sidebar) moveBranch(branchName string, delta int) {
+	// Ensure all local branches are represented in the order list.
+	// Get current local branches to build a full order.
+	branches, err := s.repo.Branches()
+	if err != nil {
+		return
+	}
+
+	// Build full local branch list in current display order.
+	var localNames []string
+	{
+		var local []git.BranchInfo
+		for _, b := range branches {
+			if !b.IsRemote {
+				local = append(local, b)
+			}
+		}
+		local = s.sortBranchesByOrder(local)
+		for _, b := range local {
+			localNames = append(localNames, b.Name)
+		}
+	}
+
+	// Find current position.
+	cur := -1
+	for i, n := range localNames {
+		if n == branchName {
+			cur = i
+			break
+		}
+	}
+	if cur < 0 {
+		return
+	}
+
+	target := cur + delta
+	if target < 0 || target >= len(localNames) {
+		return
+	}
+
+	// Swap.
+	localNames[cur], localNames[target] = localNames[target], localNames[cur]
+
+	// Save new order.
+	s.cfg.BranchOrder = localNames
+	if err := s.cfg.Save(); err != nil {
+		slog.Warn("failed to save branch order", "error", err)
+	}
+
+	s.RefreshBranches()
 }
 
 // formatCount returns a human-readable count string for expander subtitles.

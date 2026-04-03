@@ -73,7 +73,7 @@ install: build
 	install -Dm755 $(BINARY) $(BINDIR)/$(APP_NAME)
 	install -Dm644 data/$(APP_ID).desktop $(DESKTOPDIR)/$(APP_ID).desktop
 	install -Dm644 data/$(APP_ID).metainfo.xml $(METAINFODIR)/$(APP_ID).metainfo.xml
-	install -Dm644 data/icons/hicolor/scalable/apps/$(APP_ID).svg $(ICONDIR)/$(APP_ID).svg
+	install -Dm644 data/$(APP_ID).svg $(ICONDIR)/$(APP_ID).svg
 	@echo "Installed. You may need to run: update-desktop-database $(DESKTOPDIR)"
 
 # Remove installed files

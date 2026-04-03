@@ -14,15 +14,18 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 - Recent repositories list with quick access from the sidebar (auto-collapses on selection)
 - Change indicator badge (with count) on the staging button and recent repos list
 - Deleted repositories automatically detected and removed from recents
-- Resizable sidebar with drag handle
+- `AdwNavigationSplitView` sidebar following GNOME HIG — collapsible on narrow screens, single header bar spanning full width
+- Header bar with Open/Clone buttons on the left and hamburger menu on the right; view-switcher and remote ops move into the content area's secondary header
 - Toolbar buttons disabled when no repository is selected
 - XDG-compliant JSON configuration (`~/.config/gitk/config.json`)
 
 ### Commit History
 - Commit log table using `GtkColumnView` with columns: Graph, Hash, Subject, Author, Date, Refs
-- Inline graph column rendering branch/merge topology with colored lanes
+- Inline graph column: Cairo `GtkDrawingArea` per row renders branch/merge topology — colored lane lines, bezier curves for lane changes, circles for regular commits, diamonds for merges, double-ring for HEAD
+- Column reordering disabled — column order is fixed and intentional
 - Commit detail panel showing full metadata, message, and changed file list with +/- stats
 - Inline expandable diffs under each file in the commit detail panel with syntax-colored added/deleted/context lines
+- Commit table resizes synchronously with the detail panel when the window is resized or the divider is dragged
 - Actions menu button in commit detail for tag creation
 - First commit auto-selected when entering the page
 - Search filtering by message, author, or hash
@@ -46,17 +49,40 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 - Ref pills (branches, tags, remotes) with hit-testing
 
 ### Branch Management
-- Sidebar branch tree with local, remote, and tag sections using `AdwExpanderRow`
+- Sidebar branch tree with local, remote, tag, submodule, and remote sections using `AdwExpanderRow`
 - Click-to-checkout branches
 - Current branch indicator
+- Delete local branches and tags with confirmation
+- Merge any branch into the current branch with confirmation
+- Drag-and-drop reordering for local branches (order saved in config)
+- Add/remove remotes
+- Submodule management: add, update all, remove (with confirmation)
 
 ### Remote Operations
 - Push dialog with remote selection and force-push toggle (with destructive action confirmation via `AdwAlertDialog`)
 - Pull dialog with remote and branch selection
 
+### Commit Actions
+- Create tag on any commit (lightweight or annotated)
+- Create branch from any commit
+- Cherry-pick any commit onto the current branch
+- Reset current branch (soft/mixed/hard) to any commit
+- View per-file blame/annotate for any commit
+- View full file history for any file in a commit
+
 ### Tag & Stash
 - Create tag dialog (lightweight or annotated) — tags are automatically pushed to the remote after creation
-- Stash button in the staging area (stash operations pending go-git backend support)
+- Full stash management: save with message, apply, pop, drop
+- Stash count chip in toolbar showing number of stashed entries
+
+### Blame & File History
+- Blame view: annotates each source line with the commit hash, author, date, and message
+- File history view: shows the full commit log filtered to a single file (follows renames)
+
+### Interactive Rebase
+- Rebase UI: select a base commit, then reorder/squash/fixup/reword/drop commits
+- Drag-and-drop or Up/Down buttons to reorder commits in the todo list
+- Kicks off `git rebase -i` with a pre-built todo — no terminal editor needed
 
 ### Three-Way Merge Editor
 - Three-pane layout: OURS (read-only) | RESULT (editable) | THEIRS (read-only)
@@ -72,9 +98,9 @@ GiTK uses [gotk4](https://github.com/diamondburned/gotk4) for GTK4/libadwaita bi
 - Settings persist to JSON config on window close
 
 ### AI Commit Message Generation (Optional)
-- Claude API integration via the Anthropic Messages API
-- Reads API key from `ANTHROPIC_API_KEY` environment variable
-- Configurable model selection (default: `claude-sonnet-4-20250514`)
+- Three providers: **Claude (Anthropic)**, **Google Gemini**, and **OpenCode Go**
+- API keys configured directly in **Preferences > AI** (no environment variable required; env vars are used as a fallback)
+- Provider and model selectable per-provider in Preferences
 - Generates conventional commit messages from staged diffs
 - Enable/disable from Preferences
 
@@ -256,15 +282,31 @@ GiTK/
 │   │
 │   ├── dialogs/
 │   │   ├── clone.go                 #   Clone repository dialog
-│   │   ├── remote.go                #   Push/Pull dialogs
+│   │   ├── remote.go                #   Push/Pull/Add-remote dialogs
 │   │   ├── tag.go                   #   Create tag dialog
-│   │   └── stash.go                 #   Stash dialog (UI only)
+│   │   ├── stash.go                 #   Stash save dialog
+│   │   ├── branch.go                #   Create branch dialog
+│   │   └── submodule.go             #   Add/remove submodule dialogs
+│   │
+│   ├── stash/
+│   │   └── stash.go                 #   Stash management page
+│   │
+│   ├── blame/
+│   │   └── blameview.go             #   Blame/annotate view
+│   │
+│   ├── filehistory/
+│   │   └── filehistory.go           #   Per-file commit history
+│   │
+│   ├── rebase/
+│   │   └── rebaseview.go            #   Interactive rebase UI
 │   │
 │   └── prefs/
 │       └── prefs.go                 #   AdwPreferencesWindow
 │
 ├── ai/
 │   ├── claude.go                    # Claude API client
+│   ├── opencode.go                  # OpenCode Go API client
+│   ├── provider.go                  # AIProvider interface + factory
 │   └── prompts.go                   # Prompt templates
 │
 └── data/
@@ -320,16 +362,39 @@ The UI adapts based on the current state (e.g., showing the merge editor when in
 
 ## AI Commit Messages (Optional)
 
-GiTK can generate commit messages using the Claude API. To enable:
+GiTK can generate commit messages using AI. Three providers are supported: **Claude (Anthropic)**, **Google Gemini**, and **OpenCode Go**.
 
-1. Set the `ANTHROPIC_API_KEY` environment variable:
-   ```bash
-   export ANTHROPIC_API_KEY="sk-ant-..."
-   ```
-2. Open **Preferences** > **AI** and enable "AI Features"
-3. Optionally change the model (default: `claude-sonnet-4-20250514`)
+### Setup
 
-The AI reads your staged diff and generates a conventional commit message (type, scope, description). The API key is never stored in the config file.
+1. Open **Preferences** (`Ctrl+,`) and go to the **AI** tab
+2. Toggle **Enable AI Features** on
+3. Select a **Provider** and enter your API key for that provider
+4. Optionally pick a different model
+
+The API key is stored in `~/.config/gitk/config.json` (user-owned, restricted permissions). Alternatively, the key can be supplied via environment variable — GiTK will fall back to the environment variable if the config key is empty.
+
+### Claude (Anthropic)
+
+- API key: enter in Preferences, or set `ANTHROPIC_API_KEY` in the environment
+- Models: `claude-sonnet-4-20250514` (default), `claude-opus-4-20250514`, `claude-haiku-4-5-20251001`
+- Get a key at [console.anthropic.com](https://console.anthropic.com)
+
+### Google Gemini
+
+- API key: enter in Preferences, or set `GEMINI_API_KEY` in the environment
+- Models: `gemini-2.5-flash` (default), `gemini-2.5-pro`, `gemini-2.0-flash`
+- Get a key at [aistudio.google.com](https://aistudio.google.com)
+
+### OpenCode Go
+
+- API key: enter in Preferences, or set `OPENCODE_API_KEY` in the environment
+- Models: `opencode-go/kimi-k2.5` (default), `opencode-go/glm-5`, `opencode-go/minimax-m2.5`
+- Requires an [OpenCode Go subscription](https://opencode.ai/docs/go/) at opencode.ai
+- Uses an OpenAI-compatible endpoint at `https://opencode.ai/zen/go/v1/chat/completions`
+
+### How it works
+
+Clicking the ✨ button in the staging area sends your staged diff to the selected AI provider and inserts the generated [conventional commit](https://www.conventionalcommits.org/) message (type, scope, subject + optional body) into the commit message editor.
 
 ---
 
@@ -384,14 +449,28 @@ The app ID `io.github.MedaiP90.GiTK` follows the Flathub verification format.
 - [x] Preferences window
 - [x] Flatpak packaging files
 
-### v0.2.0 (Planned)
-- [ ] Interactive rebase UI
-- [ ] Cherry-pick dialog
-- [ ] Blame/annotate view
-- [ ] File history view
-- [ ] Submodule management
-- [ ] Stash operations (pending go-git support or git CLI fallback)
-- [ ] Drag-and-drop branch reordering in sidebar
+### v0.2.0 (In Progress)
+- [x] Stash operations (full UI + git CLI backend)
+- [x] Stash count chip in toolbar
+- [x] Submodule management (add, update, remove in sidebar)
+- [x] Branch creation from commit detail action menu
+- [x] Branch deletion and merge from sidebar
+- [x] Tag deletion from sidebar
+- [x] Remove items from recent repositories list
+- [x] Reset-to-commit (soft/mixed/hard) from commit detail
+- [x] Add remotes from sidebar
+- [x] Commit graph rendering fixed (hash-based O(1) lookup)
+- [x] OpenCode Go as second AI provider
+- [x] Google Gemini as third AI provider
+- [x] `AdwNavigationSplitView` sidebar layout (GNOME HIG compliant)
+- [x] Commit table resize fixed (synchronous with detail panel on window resize/divider drag)
+- [x] Column reordering removed from commit log table
+- [x] Cairo graph column rendering in `GtkColumnView` (lane lines, bezier curves, node shapes)
+- [x] Cherry-pick dialog (from commit detail action menu)
+- [x] File history view (per-file commit log)
+- [x] Blame/annotate view (per-line commit info)
+- [x] Interactive rebase UI (reorder, squash, fixup, drop)
+- [x] Drag-and-drop branch reordering in sidebar
 
 ### v0.3.0 (Planned)
 - [ ] Built-in image diff viewer

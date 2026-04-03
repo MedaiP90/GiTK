@@ -17,7 +17,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -457,6 +459,19 @@ func (r *Repository) Checkout(branchName string) error {
 	return nil
 }
 
+// CheckoutTrack creates a local tracking branch from a remote branch and checks it out.
+// remoteBranch should be in the form "origin/feature-x".
+func (r *Repository) CheckoutTrack(remoteBranch string) error {
+	cmd := exec.Command("git", "checkout", "--track", remoteBranch)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("checkout --track %q: %s", remoteBranch, strings.TrimSpace(string(out)))
+	}
+	slog.Info("checked out tracking branch", "remote", remoteBranch)
+	return nil
+}
+
 // CheckoutCommit checks out a specific commit (detached HEAD).
 func (r *Repository) CheckoutCommit(hash string) error {
 	r.mu.Lock()
@@ -619,6 +634,30 @@ func (r *Repository) DeleteTag(name string) error {
 	return nil
 }
 
+// DeleteRemoteBranch deletes a branch from the given remote using git push --delete.
+func (r *Repository) DeleteRemoteBranch(remote, name string) error {
+	cmd := exec.Command("git", "push", remote, "--delete", name)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("delete remote branch: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("remote branch deleted", "remote", remote, "name", name)
+	return nil
+}
+
+// DeleteRemoteTag deletes a tag from the given remote using git push --delete.
+func (r *Repository) DeleteRemoteTag(remote, name string) error {
+	cmd := exec.Command("git", "push", remote, "--delete", "refs/tags/"+name)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("delete remote tag: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("remote tag deleted", "remote", remote, "name", name)
+	return nil
+}
+
 // RemoteInfo holds information about a Git remote.
 type RemoteInfo struct {
 	// Name is the remote name (e.g., "origin").
@@ -753,6 +792,19 @@ func (r *Repository) Reset(commitHash string, mode ResetMode) error {
 	}
 
 	slog.Info("reset", "hash", commitHash[:7], "mode", mode)
+	return nil
+}
+
+// MergeBranch merges the given branch into the current branch.
+// It shells out to the git CLI because go-git's merge support is limited.
+func (r *Repository) MergeBranch(branchName string) error {
+	cmd := exec.Command("git", "merge", "--no-edit", branchName)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("merge %s: %s", branchName, strings.TrimSpace(string(out)))
+	}
+	slog.Info("merged branch", "branch", branchName)
 	return nil
 }
 
@@ -1028,36 +1080,592 @@ type StashInfo struct {
 	Hash string
 }
 
-// Note: go-git has limited stash support. The Stash/StashPop/StashList
-// methods below use the available API. For full stash support, we may
-// need to shell out to git in the future.
-
 // StashSave creates a new stash entry with the current changes.
-// Note: go-git's stash support is limited. This is a best-effort
-// implementation.
+// It shells out to the git CLI because go-git v5 has no built-in stash support.
 func (r *Repository) StashSave(message string) error {
-	// go-git v5 does not have built-in stash support.
-	// For now, return an informative error. In the future, we could
-	// shell out to the git CLI for this operation.
-	return fmt.Errorf("stash save: not yet implemented in go-git backend")
+	args := []string{"stash", "push"}
+	if message != "" {
+		args = append(args, "-m", message)
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stash save: %s", strings.TrimSpace(string(out)))
+	}
+	output := strings.TrimSpace(string(out))
+	if output == "No local changes to save" {
+		return fmt.Errorf("stash save: no local changes to save")
+	}
+	slog.Info("stash saved", "message", message)
+	return nil
 }
 
 // StashList returns the list of stash entries.
+// It parses the output of "git stash list --format=%H %s".
 func (r *Repository) StashList() ([]StashInfo, error) {
-	return nil, fmt.Errorf("stash list: not yet implemented in go-git backend")
+	cmd := exec.Command("git", "stash", "list", "--format=%H\t%s")
+	cmd.Dir = r.path
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("stash list: %w", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var stashes []StashInfo
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		hash := ""
+		msg := line
+		if len(parts) == 2 {
+			hash = parts[0]
+			msg = parts[1]
+		}
+		stashes = append(stashes, StashInfo{Index: i, Message: msg, Hash: hash})
+	}
+	return stashes, nil
 }
 
-// StashApply applies a stash entry without removing it.
+// StashApply applies a stash entry without removing it from the stash list.
 func (r *Repository) StashApply(index int) error {
-	return fmt.Errorf("stash apply: not yet implemented in go-git backend")
+	ref := "stash@{" + strconv.Itoa(index) + "}"
+	cmd := exec.Command("git", "stash", "apply", ref)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stash apply: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("stash applied", "index", index)
+	return nil
 }
 
 // StashPop applies and removes a stash entry.
 func (r *Repository) StashPop(index int) error {
-	return fmt.Errorf("stash pop: not yet implemented in go-git backend")
+	ref := "stash@{" + strconv.Itoa(index) + "}"
+	cmd := exec.Command("git", "stash", "pop", ref)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stash pop: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("stash popped", "index", index)
+	return nil
 }
 
 // StashDrop removes a stash entry without applying it.
 func (r *Repository) StashDrop(index int) error {
-	return fmt.Errorf("stash drop: not yet implemented in go-git backend")
+	ref := "stash@{" + strconv.Itoa(index) + "}"
+	cmd := exec.Command("git", "stash", "drop", ref)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stash drop: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("stash dropped", "index", index)
+	return nil
+}
+
+// StashShow returns the list of changed files and their structured diffs for a stash entry.
+func (r *Repository) StashShow(index int) ([]DiffResult, error) {
+	ref := "stash@{" + strconv.Itoa(index) + "}"
+	// Use only -p to get the raw patch; parse file paths from diff --git headers.
+	cmd := exec.Command("git", "stash", "show", "-p", ref)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("stash show: %s", strings.TrimSpace(string(out)))
+	}
+
+	raw := string(out)
+
+	// Split the raw patch at "diff --git " boundaries to get per-file sections.
+	sections := strings.Split(raw, "diff --git ")
+	// sections[0] is any output before the first diff (summary stats) — skip it.
+
+	var results []DiffResult
+	for _, section := range sections[1:] {
+		if strings.TrimSpace(section) == "" {
+			continue
+		}
+		// Extract the file path from the first line: "a/<path> b/<path>"
+		firstNewline := strings.IndexByte(section, '\n')
+		header := section
+		if firstNewline >= 0 {
+			header = section[:firstNewline]
+		}
+		// header is like "a/path/to/file b/path/to/file"
+		path := extractDiffPath(header)
+
+		dr := ParseRawDiff("diff --git " + section)
+		dr.OldPath = path
+		dr.NewPath = path
+		if dr.ChangeType == 0 {
+			dr.ChangeType = ChangeModified
+		}
+		results = append(results, dr)
+	}
+
+	return results, nil
+}
+
+// extractDiffPath extracts the new file path from a "diff --git" first-line
+// header of the form "a/<path> b/<path>".
+func extractDiffPath(header string) string {
+	// The format is "a/<path> b/<path>".
+	// Find the last " b/" which marks the start of the new path.
+	idx := strings.LastIndex(header, " b/")
+	if idx >= 0 {
+		return header[idx+3:] // strip " b/"
+	}
+	// Fallback: try stripping the "b/" prefix from the right half.
+	parts := strings.SplitN(header, " ", 2)
+	if len(parts) == 2 {
+		p := parts[1]
+		if strings.HasPrefix(p, "b/") {
+			return p[2:]
+		}
+		return p
+	}
+	return header
+}
+
+// StashClear removes all stash entries from the repository.
+func (r *Repository) StashClear() error {
+	cmd := exec.Command("git", "stash", "clear")
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stash clear: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("stash cleared")
+	return nil
+}
+
+// SubmoduleInfo holds information about a git submodule.
+type SubmoduleInfo struct {
+	// Name is the submodule name (usually the path).
+	Name string
+
+	// Path is the submodule path relative to the repository root.
+	Path string
+
+	// URL is the remote URL of the submodule.
+	URL string
+
+	// Hash is the currently checked-out commit hash in the submodule.
+	Hash string
+}
+
+// Submodules returns information about all submodules in the repository.
+func (r *Repository) Submodules() ([]SubmoduleInfo, error) {
+	cmd := exec.Command("git", "submodule", "status")
+	cmd.Dir = r.path
+	out, err := cmd.Output()
+	if err != nil {
+		// Not an error if there are simply no submodules.
+		return nil, nil
+	}
+
+	// Parse the URL for each submodule from .gitmodules via config.
+	urlCmd := exec.Command("git", "config", "--file", ".gitmodules", "--get-regexp", "submodule\\..*\\.url")
+	urlCmd.Dir = r.path
+	urlOut, _ := urlCmd.Output()
+	urlMap := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(urlOut)), "\n") {
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) == 2 {
+			// key: "submodule.<name>.url"
+			key := parts[0]
+			url := parts[1]
+			// Extract <name> from key.
+			keyParts := strings.Split(key, ".")
+			if len(keyParts) >= 3 {
+				name := strings.Join(keyParts[1:len(keyParts)-1], ".")
+				urlMap[name] = url
+			}
+		}
+	}
+
+	var submodules []SubmoduleInfo
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		// Format: [ +-U]<hash> <path> [(<describe>)]
+		line = strings.TrimLeft(line, " +-U")
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		hash := parts[0]
+		path := parts[1]
+		name := path
+		url := urlMap[name]
+		submodules = append(submodules, SubmoduleInfo{
+			Name: name,
+			Path: path,
+			URL:  url,
+			Hash: hash,
+		})
+	}
+	return submodules, nil
+}
+
+// AddSubmodule adds a new submodule to the repository.
+func (r *Repository) AddSubmodule(url, path string) error {
+	cmd := exec.Command("git", "submodule", "add", url, path)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("add submodule: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("submodule added", "url", url, "path", path)
+	return nil
+}
+
+// UpdateSubmodules runs `git submodule update --init --recursive` to
+// initialise and update all submodules to the committed state.
+func (r *Repository) UpdateSubmodules() error {
+	cmd := exec.Command("git", "submodule", "update", "--init", "--recursive")
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("update submodules: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("submodules updated")
+	return nil
+}
+
+// RemoveSubmodule removes a submodule from the repository by deinitialising,
+// removing the worktree directory and unregistering from .gitmodules / config.
+func (r *Repository) RemoveSubmodule(path string) error {
+	// 1. Deinit.
+	cmd := exec.Command("git", "submodule", "deinit", "-f", path)
+	cmd.Dir = r.path
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("deinit submodule: %s", strings.TrimSpace(string(out)))
+	}
+	// 2. Remove from index and working tree.
+	cmd = exec.Command("git", "rm", "-f", path)
+	cmd.Dir = r.path
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git rm submodule: %s", strings.TrimSpace(string(out)))
+	}
+	// 3. Remove leftover .git/modules/<path> directory.
+	modulesDir := filepath.Join(r.path, ".git", "modules", path)
+	_ = os.RemoveAll(modulesDir)
+	slog.Info("submodule removed", "path", path)
+	return nil
+}
+
+// CherryPick applies the changes introduced by a commit onto the current branch.
+// It shells out to git CLI because go-git's cherry-pick support is limited.
+func (r *Repository) CherryPick(hash string) error {
+	cmd := exec.Command("git", "cherry-pick", hash)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("cherry-pick %s: %s", hash[:7], strings.TrimSpace(string(out)))
+	}
+	slog.Info("cherry-picked", "hash", hash[:7])
+	return nil
+}
+
+// BlameLine holds annotation data for a single line in a file.
+type BlameLine struct {
+	// LineNo is the 1-based line number in the file.
+	LineNo int
+
+	// Hash is the commit hash that last modified this line.
+	Hash string
+
+	// ShortHash is the first 7 characters of Hash.
+	ShortHash string
+
+	// Author is the name of the commit author.
+	Author string
+
+	// Date is the author date of the commit.
+	Date time.Time
+
+	// Message is the commit subject line.
+	Message string
+
+	// Text is the actual line content.
+	Text string
+}
+
+// BlameFile returns blame annotation for every line in the file at path
+// as it existed at commitHash. An empty commitHash uses HEAD.
+func (r *Repository) BlameFile(path, commitHash string) ([]BlameLine, error) {
+	args := []string{"blame", "--porcelain"}
+	if commitHash != "" {
+		args = append(args, commitHash)
+	}
+	args = append(args, "--", path)
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.path
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("blame %s: %w", path, err)
+	}
+
+	return parseBlameOutput(string(out)), nil
+}
+
+// parseBlameOutput parses the output of `git blame --porcelain`.
+func parseBlameOutput(output string) []BlameLine {
+	lines := strings.Split(output, "\n")
+	// Porcelain format: each hunk starts with "<40-hex-hash> <orig> <final> [<lines>]"
+	// followed by key-value header lines, then a line starting with TAB (the actual content).
+	commitInfo := make(map[string]struct {
+		Author  string
+		Date    time.Time
+		Message string
+	})
+
+	var result []BlameLine
+	lineNo := 0
+
+	for i := 0; i < len(lines); {
+		line := lines[i]
+		if len(line) < 40 {
+			i++
+			continue
+		}
+		// Check if this is a hash line (40 hex chars followed by space).
+		hash := line[:40]
+		allHex := true
+		for _, c := range hash {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				allHex = false
+				break
+			}
+		}
+		if !allHex || len(line) < 41 || line[40] != ' ' {
+			i++
+			continue
+		}
+
+		lineNo++
+		i++
+
+		// Read header key-value pairs until the TAB-prefixed content line.
+		ci := commitInfo[hash]
+		for i < len(lines) && len(lines[i]) > 0 && lines[i][0] != '\t' {
+			kv := lines[i]
+			i++
+			if strings.HasPrefix(kv, "author ") {
+				ci.Author = strings.TrimPrefix(kv, "author ")
+			} else if strings.HasPrefix(kv, "author-time ") {
+				ts, err := strconv.ParseInt(strings.TrimPrefix(kv, "author-time "), 10, 64)
+				if err == nil {
+					ci.Date = time.Unix(ts, 0)
+				}
+			} else if strings.HasPrefix(kv, "summary ") {
+				ci.Message = strings.TrimPrefix(kv, "summary ")
+			}
+		}
+		commitInfo[hash] = ci
+
+		// Content line (tab-prefixed).
+		text := ""
+		if i < len(lines) && len(lines[i]) > 0 && lines[i][0] == '\t' {
+			text = lines[i][1:]
+			i++
+		}
+
+		shortHash := hash
+		if len(hash) >= 7 {
+			shortHash = hash[:7]
+		}
+
+		result = append(result, BlameLine{
+			LineNo:    lineNo,
+			Hash:      hash,
+			ShortHash: shortHash,
+			Author:    commitInfo[hash].Author,
+			Date:      commitInfo[hash].Date,
+			Message:   commitInfo[hash].Message,
+			Text:      text,
+		})
+	}
+
+	return result
+}
+
+// FileLog returns the list of commits that touched the given file path,
+// following renames (using git log --follow). Limit 0 means no limit.
+func (r *Repository) FileLog(path string, limit int) ([]CommitInfo, error) {
+	args := []string{"log", "--format=%H\t%s\t%an\t%ae\t%ai", "--follow"}
+	if limit > 0 {
+		args = append(args, fmt.Sprintf("-%d", limit))
+	}
+	args = append(args, "--", path)
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.path
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("file log %s: %w", path, err)
+	}
+
+	var commits []CommitInfo
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 5)
+		if len(parts) < 5 {
+			continue
+		}
+		hash := parts[0]
+		subject := parts[1]
+		author := parts[2]
+		authorEmail := parts[3]
+		dateStr := parts[4]
+
+		shortHash := hash
+		if len(hash) >= 7 {
+			shortHash = hash[:7]
+		}
+
+		t, _ := time.Parse("2006-01-02 15:04:05 -0700", dateStr)
+
+		commits = append(commits, CommitInfo{
+			Hash:        hash,
+			ShortHash:   shortHash,
+			Subject:     subject,
+			Body:        subject,
+			Author:      author,
+			AuthorEmail: authorEmail,
+			AuthorTime:  t,
+		})
+	}
+	return commits, nil
+}
+
+// RebaseTodoAction represents a rebase todo action.
+type RebaseTodoAction string
+
+const (
+	RebasePick   RebaseTodoAction = "pick"
+	RebaseReword RebaseTodoAction = "reword"
+	RebaseEdit   RebaseTodoAction = "edit"
+	RebaseSquash RebaseTodoAction = "squash"
+	RebaseFixup  RebaseTodoAction = "fixup"
+	RebaseDrop   RebaseTodoAction = "drop"
+)
+
+// RebaseTodo is a single entry in the rebase todo list.
+type RebaseTodo struct {
+	Action  RebaseTodoAction
+	Hash    string
+	Subject string
+}
+
+// ListRebaseCommits returns commits reachable from HEAD but not from base,
+// in reverse order (oldest first), suitable for populating a rebase todo list.
+func (r *Repository) ListRebaseCommits(base string) ([]CommitInfo, error) {
+	cmd := exec.Command("git", "log", "--format=%H\t%s\t%an\t%ai", "--reverse", base+"..HEAD")
+	cmd.Dir = r.path
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("list rebase commits: %w", err)
+	}
+
+	var commits []CommitInfo
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) < 4 {
+			continue
+		}
+		hash := parts[0]
+		shortHash := hash
+		if len(hash) >= 7 {
+			shortHash = hash[:7]
+		}
+		t, _ := time.Parse("2006-01-02 15:04:05 -0700", parts[3])
+		commits = append(commits, CommitInfo{
+			Hash:       hash,
+			ShortHash:  shortHash,
+			Subject:    parts[1],
+			Body:       parts[1],
+			Author:     parts[2],
+			AuthorTime: t,
+		})
+	}
+	return commits, nil
+}
+
+// InteractiveRebase starts an interactive rebase using the given todo list.
+// It writes a custom GIT_SEQUENCE_EDITOR script to avoid opening a terminal editor.
+func (r *Repository) InteractiveRebase(base string, todos []RebaseTodo) error {
+	// Build the todo file content.
+	var sb strings.Builder
+	for _, t := range todos {
+		sb.WriteString(string(t.Action))
+		sb.WriteByte(' ')
+		sb.WriteString(t.Hash)
+		sb.WriteByte(' ')
+		sb.WriteString(t.Subject)
+		sb.WriteByte('\n')
+	}
+
+	// Write todo to temp file.
+	todoFile, err := os.CreateTemp("", "gitk-rebase-todo-*")
+	if err != nil {
+		return fmt.Errorf("create todo temp file: %w", err)
+	}
+	defer os.Remove(todoFile.Name())
+	if _, err := todoFile.WriteString(sb.String()); err != nil {
+		todoFile.Close()
+		return fmt.Errorf("write todo: %w", err)
+	}
+	todoFile.Close()
+
+	// Write a tiny shell script that replaces git's sequence editor call.
+	scriptFile, err := os.CreateTemp("", "gitk-seqeditor-*")
+	if err != nil {
+		return fmt.Errorf("create seq-editor temp file: %w", err)
+	}
+	defer os.Remove(scriptFile.Name())
+	script := fmt.Sprintf("#!/bin/sh\ncp %q \"$1\"\n", todoFile.Name())
+	if _, err := scriptFile.WriteString(script); err != nil {
+		scriptFile.Close()
+		return fmt.Errorf("write seq-editor script: %w", err)
+	}
+	scriptFile.Close()
+	if err := os.Chmod(scriptFile.Name(), 0700); err != nil {
+		return fmt.Errorf("chmod seq-editor: %w", err)
+	}
+
+	cmd := exec.Command("git", "rebase", "-i", base)
+	cmd.Dir = r.path
+	cmd.Env = append(os.Environ(), "GIT_SEQUENCE_EDITOR="+scriptFile.Name())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("rebase: %s", strings.TrimSpace(string(out)))
+	}
+
+	slog.Info("interactive rebase completed", "base", base, "todos", len(todos))
+	return nil
+}
+
+// AbortRebase aborts an in-progress interactive rebase.
+func (r *Repository) AbortRebase() error {
+	cmd := exec.Command("git", "rebase", "--abort")
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("rebase --abort: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("rebase aborted")
+	return nil
 }

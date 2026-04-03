@@ -64,6 +64,11 @@ type Config struct {
 	// Graph holds settings for the visual graph view.
 	Graph GraphConfig `json:"graph"`
 
+	// BranchOrder stores custom ordering for local branches in the sidebar.
+	// Branches not listed here appear after the explicitly-ordered ones,
+	// sorted alphabetically.
+	BranchOrder []string `json:"branch_order,omitempty"`
+
 	// configPath is the full path to the config file on disk.
 	// This is not serialized — it's set when loading.
 	configPath string `json:"-"`
@@ -96,13 +101,29 @@ type AIConfig struct {
 	// Enabled controls whether AI features are available in the UI.
 	Enabled bool `json:"enabled"`
 
+	// Provider selects the AI backend: "claude" (Anthropic) or "opencode"
+	// (OpenCode Go). Defaults to "claude".
+	Provider string `json:"provider,omitempty"`
+
 	// APIKey is the Anthropic API key for Claude AI.
 	// Note: Storing API keys in config is acceptable for desktop apps
 	// where the config file is user-owned and has restricted permissions.
 	APIKey string `json:"api_key,omitempty"`
 
+	// OpenCodeAPIKey is the API key for the OpenCode Go subscription.
+	OpenCodeAPIKey string `json:"opencode_api_key,omitempty"`
+
 	// Model is the Claude model to use (e.g., "claude-sonnet-4-20250514").
 	Model string `json:"model"`
+
+	// OpenCodeModel is the model to use with the OpenCode Go API.
+	OpenCodeModel string `json:"opencode_model,omitempty"`
+
+	// GeminiAPIKey is the API key for Google Gemini AI.
+	GeminiAPIKey string `json:"gemini_api_key,omitempty"`
+
+	// GeminiModel is the Gemini model to use (e.g., "gemini-2.5-flash").
+	GeminiModel string `json:"gemini_model,omitempty"`
 
 	// SystemPrompt is an optional custom system prompt for commit message
 	// generation. If empty, the default prompt is used.
