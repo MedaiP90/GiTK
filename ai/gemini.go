@@ -74,13 +74,12 @@ func (g *GeminiClient) GenerateCommitMessage(ctx context.Context, diff string, s
 		return "", fmt.Errorf("gemini: API key not configured")
 	}
 
-	prompt := systemPrompt
-	if prompt == "" {
-		prompt = "You are a helpful assistant that generates concise git commit messages. " +
-			"Given the following diff, write a short, imperative commit message (max 72 chars for the subject). " +
-			"Output only the commit message, no explanation."
+	if systemPrompt == "" {
+		systemPrompt = DefaultSystemPrompt
 	}
-	prompt += "\n\nDiff:\n" + diff
+
+	prompt := systemPrompt
+	prompt += "\n\n" + BuildCommitMessagePrompt(diff)
 
 	reqBody := geminiRequest{
 		Contents: []geminiContent{

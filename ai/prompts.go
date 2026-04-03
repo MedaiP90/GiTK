@@ -10,9 +10,10 @@ following conventional commit guidelines:
 2. Blank line after subject
 3. Optional body: wrapped at 72 characters, explaining WHY not WHAT
 
-Format: type(scope): description
+Format: type (scope): description
 
-Types: feat, fix, docs, style, refactor, test, chore, perf, ci, build
+Scope: optional, omit if the change is not specific to a particular area.
+Types: feat, fix, docs, style, refactor, test, chore, perf, ci, build.
 
 Respond with ONLY the commit message, no explanation or markdown.`
 
