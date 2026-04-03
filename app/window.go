@@ -288,8 +288,6 @@ func (w *Window) buildContentHeader(viewStack *adw.ViewStack) *adw.HeaderBar {
 			})
 		}()
 	})
-	bar.PackEnd(w.fetchBtn)
-
 
 	w.pullBtn = gtk.NewButtonFromIconName("go-down-symbolic")
 	w.pullBtn.SetTooltipText("Pull")
@@ -304,7 +302,6 @@ func (w *Window) buildContentHeader(viewStack *adw.ViewStack) *adw.HeaderBar {
 			})
 		}
 	})
-	bar.PackEnd(w.pullBtn)
 
 	w.pushBtn = gtk.NewButtonFromIconName("send-to-symbolic")
 	w.pushBtn.SetTooltipText("Push")
@@ -316,7 +313,10 @@ func (w *Window) buildContentHeader(viewStack *adw.ViewStack) *adw.HeaderBar {
 			})
 		}
 	})
+
 	bar.PackEnd(w.pushBtn)
+	bar.PackEnd(w.pullBtn)
+	bar.PackEnd(w.fetchBtn)
 
 
 	return bar
