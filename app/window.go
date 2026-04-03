@@ -168,6 +168,12 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 .fetching-spinner {
   color: @accent_color;
 }
+.dragging {
+	opacity: 0.5;
+}
+.drop-target {
+	background-color: alpha(@accent_color, 0.1);
+}
 .current-branch-chip {
 	border-radius: 8px;
 	padding: 1px 7px;
@@ -560,14 +566,41 @@ func (w *Window) buildContentArea() {
 	// Merge view.
 	w.mergeView = merge.New(
 		func(path string, content string) {
-			slog.Info("merge resolved", "path", path)
-			w.ShowToast("Resolved " + path)
-			w.contentStack.SetVisibleChildName("staging")
+			go func() {
+				err := w.repo.MarkResolved(path, content)
+				glib.IdleAdd(func() {
+					if err != nil {
+						w.ShowToast("Failed to write resolved file: " + err.Error())
+						return
+					}
+					slog.Info("merge resolved", "path", path)
+					w.ShowToast("Resolved " + path)
+					// Check for remaining conflicts.
+					remaining, _ := w.repo.ConflictedFiles()
+					if len(remaining) > 0 {
+						w.openMergeForConflicts()
+					} else {
+						w.commitLog.Refresh()
+						w.stagingView.SetRepository(w.repo)
+						w.switchToView("staging")
+					}
+				})
+			}()
 		},
 		func() {
-			slog.Info("merge aborted")
-			w.ShowToast("Merge aborted")
-			w.contentStack.SetVisibleChildName("log")
+			go func() {
+				err := w.repo.AbortMerge()
+				glib.IdleAdd(func() {
+					if err != nil {
+						w.ShowToast("Abort failed: " + err.Error())
+					} else {
+						w.ShowToast("Merge aborted")
+					}
+					w.commitLog.Refresh()
+					w.sidebar.RefreshBranches()
+					w.switchToView("log")
+				})
+			}()
 		},
 	)
 	w.contentStack.AddNamed(w.mergeView.Root, "merge")
@@ -858,6 +891,7 @@ func (w *Window) onBranchDelete(branchName string) {
 				}
 				w.ShowToast("Deleted branch " + branchName)
 				w.sidebar.RefreshBranches()
+				w.commitLog.Refresh()
 			})
 			if alsoRemote {
 				remoteErr := w.repo.DeleteRemoteBranch("origin", branchName)
@@ -907,6 +941,7 @@ func (w *Window) onTagDelete(tagName string) {
 				}
 				w.ShowToast("Deleted tag " + tagName)
 				w.sidebar.RefreshBranches()
+				w.commitLog.Refresh()
 			})
 			if alsoRemote {
 				remoteErr := w.repo.DeleteRemoteTag("origin", tagName)
@@ -949,10 +984,10 @@ func (w *Window) onBranchMerge(branchName string) {
 				if err != nil {
 					msg := err.Error()
 					w.ShowToast("Merge: " + msg)
-					// If it's a conflict, switch to staging so user can resolve.
+					// If it's a conflict, open the merge tool.
 					if strings.Contains(msg, "conflict") || strings.Contains(msg, "CONFLICT") {
-						w.stagingView.SetRepository(w.repo)
-						w.switchToView("staging")
+						w.commitLog.Refresh()
+						w.openMergeForConflicts()
 					}
 					return
 				}
@@ -963,6 +998,81 @@ func (w *Window) onBranchMerge(branchName string) {
 		}()
 	})
 	dialog.Present(w.window)
+}
+
+// openMergeForConflicts detects conflicted files and opens the merge view
+// for the first one. If an external merge tool is configured, it launches that
+// instead.
+func (w *Window) openMergeForConflicts() {
+	go func() {
+		files, err := w.repo.ConflictedFiles()
+		if err != nil || len(files) == 0 {
+			glib.IdleAdd(func() {
+				// No conflicts detected or error — fall back to staging.
+				w.stagingView.SetRepository(w.repo)
+				w.switchToView("staging")
+			})
+			return
+		}
+
+		// Check if an external merge tool is configured.
+		if w.cfg.MergeTool.UseExternal && w.cfg.MergeTool.ExternalCommand != "" {
+			w.launchExternalMergeToolForFiles(files)
+			return
+		}
+
+		// Use the integrated merge view.
+		base, ours, theirs, err := w.repo.ConflictFileVersions(files[0])
+		if err != nil {
+			glib.IdleAdd(func() {
+				w.ShowToast("Cannot read conflict versions: " + err.Error())
+				w.stagingView.SetRepository(w.repo)
+				w.switchToView("staging")
+			})
+			return
+		}
+		result := git.ThreeWayMerge(files[0], base, ours, theirs)
+		glib.IdleAdd(func() {
+			w.mergeView.SetConflictFiles(files)
+			w.mergeView.SetMergeResult(&result)
+			w.switchToView("merge")
+		})
+	}()
+}
+
+// launchExternalMergeToolForFiles launches the external merge tool for each
+// conflicted file in sequence.
+func (w *Window) launchExternalMergeToolForFiles(files []string) {
+	for _, file := range files {
+		base, ours, theirs, err := w.repo.ConflictFileVersions(file)
+		if err != nil {
+			glib.IdleAdd(func() {
+				w.ShowToast("Cannot read conflict versions: " + err.Error())
+			})
+			continue
+		}
+		merged, err := git.LaunchExternalMergeTool(
+			w.cfg.MergeTool.ExternalCommand, w.repo.Path(), file, base, ours, theirs,
+		)
+		if err != nil {
+			glib.IdleAdd(func() {
+				w.ShowToast("External merge tool failed: " + err.Error())
+			})
+			continue
+		}
+		if err := w.repo.MarkResolved(file, merged); err != nil {
+			glib.IdleAdd(func() {
+				w.ShowToast("Failed to stage resolved file: " + err.Error())
+			})
+		}
+	}
+	glib.IdleAdd(func() {
+		w.ShowToast("All conflicts resolved with external tool")
+		w.commitLog.Refresh()
+		w.sidebar.RefreshBranches()
+		w.stagingView.SetRepository(w.repo)
+		w.switchToView("staging")
+	})
 }
 
 // onBranchRebase is called by the sidebar when the user wants to rebase onto a branch.
@@ -984,6 +1094,7 @@ func (w *Window) onAddRemote() {
 	dialogs.ShowAddRemoteDialog(w.window, w.repo, func(msg string) {
 		w.ShowToast(msg)
 		w.sidebar.RefreshBranches()
+		w.commitLog.Refresh()
 	})
 }
 
@@ -995,6 +1106,7 @@ func (w *Window) onSubmoduleAdd() {
 	dialogs.ShowAddSubmoduleDialog(w.window, w.repo, func(msg string) {
 		w.ShowToast(msg)
 		w.sidebar.RefreshBranches()
+		w.commitLog.Refresh()
 	})
 }
 
@@ -1013,6 +1125,7 @@ func (w *Window) onSubmoduleRemove(path string) {
 				}
 				w.ShowToast("Submodule '" + path + "' removed")
 				w.sidebar.RefreshBranches()
+				w.commitLog.Refresh()
 			})
 		}()
 	})
@@ -1032,6 +1145,7 @@ func (w *Window) onSubmoduleUpdate() {
 			}
 			w.ShowToast("Submodules updated")
 			w.sidebar.RefreshBranches()
+			w.commitLog.Refresh()
 		})
 	}()
 }
@@ -1062,6 +1176,7 @@ func (w *Window) registerWindowActions() {
 		dialogs.ShowCreateTagDialog(w.window, w.repo, commitHash, func(msg string) {
 			w.ShowToast(msg)
 			w.sidebar.RefreshBranches()
+			w.commitLog.Refresh()
 		})
 	})
 	w.window.AddAction(tagAction)
@@ -1079,6 +1194,7 @@ func (w *Window) registerWindowActions() {
 		dialogs.ShowCreateBranchDialog(w.window, w.repo, commitHash, func(msg string) {
 			w.ShowToast(msg)
 			w.sidebar.RefreshBranches()
+			w.commitLog.Refresh()
 		})
 	})
 	w.window.AddAction(createBranchAction)

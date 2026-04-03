@@ -51,11 +51,20 @@ type MergeView struct {
 	// conflictLabel shows "X / Y conflicts resolved".
 	conflictLabel *gtk.Label
 
+	// fileLabel shows the current file path and file counter.
+	fileLabel *gtk.Label
+
 	// resolveBtn is the "Mark as Resolved" button.
 	resolveBtn *gtk.Button
 
 	// currentConflict is the index of the currently selected conflict.
 	currentConflict int
+
+	// conflictFiles is the list of all conflicted files.
+	conflictFiles []string
+
+	// currentFileIndex is the index of the currently shown file.
+	currentFileIndex int
 
 	// onResolved is called when all conflicts are resolved.
 	onResolved OnMergeResolved
@@ -96,9 +105,18 @@ func (mv *MergeView) build() {
 	nextBtn.ConnectClicked(func() { mv.navigateConflict(1) })
 	header.PackStart(nextBtn)
 
-	// Conflict counter.
+	// Title area: file label + conflict counter stacked vertically.
+	mv.fileLabel = gtk.NewLabel("")
+	mv.fileLabel.AddCSSClass("heading")
 	mv.conflictLabel = gtk.NewLabel("0 / 0 conflicts")
-	header.SetTitleWidget(mv.conflictLabel)
+	mv.conflictLabel.AddCSSClass("dim-label")
+	mv.conflictLabel.AddCSSClass("caption")
+
+	titleBox := gtk.NewBox(gtk.OrientationVertical, 0)
+	titleBox.SetVAlign(gtk.AlignCenter)
+	titleBox.Append(mv.fileLabel)
+	titleBox.Append(mv.conflictLabel)
+	header.SetTitleWidget(titleBox)
 
 	// Resolve button.
 	mv.resolveBtn = gtk.NewButtonWithLabel("Mark as Resolved")
@@ -173,17 +191,46 @@ func (mv *MergeView) build() {
 	mv.Root.SetContent(mainBox)
 }
 
+// SetConflictFiles sets the list of all conflicted files for navigation.
+func (mv *MergeView) SetConflictFiles(files []string) {
+	mv.conflictFiles = files
+	mv.updateFileLabel()
+}
+
 // SetMergeResult loads a merge result for resolution.
 func (mv *MergeView) SetMergeResult(result *git.MergeResult) {
 	mv.mergeResult = result
 	mv.currentConflict = 0
+
+	// Update the file index based on the path.
+	for i, f := range mv.conflictFiles {
+		if f == result.Path {
+			mv.currentFileIndex = i
+			break
+		}
+	}
 
 	// Set pane contents.
 	mv.oursView.Buffer().SetText(result.OursContent)
 	mv.resultView.Buffer().SetText(result.MergedContent)
 	mv.theirsView.Buffer().SetText(result.TheirsContent)
 
+	mv.updateFileLabel()
 	mv.updateConflictLabel()
+}
+
+// updateFileLabel updates the file path display.
+func (mv *MergeView) updateFileLabel() {
+	if mv.mergeResult == nil {
+		mv.fileLabel.SetText("")
+		return
+	}
+	if len(mv.conflictFiles) > 1 {
+		mv.fileLabel.SetText(fmt.Sprintf("File %d/%d: %s",
+			mv.currentFileIndex+1, len(mv.conflictFiles), mv.mergeResult.Path))
+	} else {
+		mv.fileLabel.SetText(mv.mergeResult.Path)
+	}
 }
 
 // navigateConflict moves to the previous or next conflict.

@@ -491,8 +491,11 @@ func (cl *CommitLog) addRefsColumn() {
 		}
 
 		pos := item.Position()
-		if int(pos) < len(cl.graphCommits) {
-			gc := cl.graphCommits[pos]
+		if int(pos) < len(cl.commits) {
+			gc, exists := cl.graphCommitMap[cl.commits[pos].Hash]
+			if !exists {
+				return
+			}
 
 			// Group refs by kind.
 			var locals, remotes, tags []git.GraphRef

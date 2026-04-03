@@ -64,6 +64,9 @@ type Config struct {
 	// Graph holds settings for the visual graph view.
 	Graph GraphConfig `json:"graph"`
 
+	// MergeTool holds settings for merge conflict resolution.
+	MergeTool MergeToolConfig `json:"merge_tool"`
+
 	// BranchOrder stores custom ordering for local branches in the sidebar.
 	// Branches not listed here appear after the explicitly-ordered ones,
 	// sorted alphabetically.
@@ -128,6 +131,17 @@ type AIConfig struct {
 	// SystemPrompt is an optional custom system prompt for commit message
 	// generation. If empty, the default prompt is used.
 	SystemPrompt string `json:"system_prompt,omitempty"`
+}
+
+// MergeToolConfig holds settings for the merge conflict resolution tool.
+type MergeToolConfig struct {
+	// UseExternal, when true, launches an external merge tool instead of
+	// the built-in three-pane editor.
+	UseExternal bool `json:"use_external"`
+
+	// ExternalCommand is the command to run for the external merge tool.
+	// Example: "meld", "kdiff3", "vimdiff".
+	ExternalCommand string `json:"external_command,omitempty"`
 }
 
 // GraphConfig holds settings for the visual graph view.

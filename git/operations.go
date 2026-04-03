@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -551,6 +552,21 @@ func (r *Repository) Tags() ([]TagInfo, error) {
 		return nil, fmt.Errorf("iterate tags: %w", err)
 	}
 
+	// For lightweight tags (no TagTime), resolve the commit time.
+	for i := range tags {
+		if tags[i].TagTime.IsZero() {
+			commitObj, err := r.repo.CommitObject(plumbing.NewHash(tags[i].Hash))
+			if err == nil {
+				tags[i].TagTime = commitObj.Committer.When
+			}
+		}
+	}
+
+	// Sort tags by time, most recent first.
+	sort.Slice(tags, func(i, j int) bool {
+		return tags[i].TagTime.After(tags[j].TagTime)
+	})
+
 	return tags, nil
 }
 
@@ -808,6 +824,132 @@ func (r *Repository) MergeBranch(branchName string) error {
 	}
 	slog.Info("merged branch", "branch", branchName)
 	return nil
+}
+
+// ConflictedFiles returns the list of files with merge conflicts.
+// It runs `git diff --name-only --diff-filter=U` to find unmerged paths.
+func (r *Repository) ConflictedFiles() ([]string, error) {
+	cmd := exec.Command("git", "diff", "--name-only", "--diff-filter=U")
+	cmd.Dir = r.path
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("list conflicted files: %w", err)
+	}
+	output := strings.TrimSpace(string(out))
+	if output == "" {
+		return nil, nil
+	}
+	return strings.Split(output, "\n"), nil
+}
+
+// ConflictFileVersions retrieves the base, ours, and theirs content for
+// a conflicted file from the git index stages.
+// Stage 1 = base (common ancestor), Stage 2 = ours (HEAD), Stage 3 = theirs.
+func (r *Repository) ConflictFileVersions(path string) (base, ours, theirs string, err error) {
+	readStage := func(stage string) (string, error) {
+		cmd := exec.Command("git", "show", ":"+stage+":"+path)
+		cmd.Dir = r.path
+		out, err := cmd.Output()
+		if err != nil {
+			// Stage may not exist (e.g., file added on one side only).
+			return "", nil
+		}
+		return string(out), nil
+	}
+
+	base, err = readStage("1")
+	if err != nil {
+		return "", "", "", fmt.Errorf("read base: %w", err)
+	}
+	ours, err = readStage("2")
+	if err != nil {
+		return "", "", "", fmt.Errorf("read ours: %w", err)
+	}
+	theirs, err = readStage("3")
+	if err != nil {
+		return "", "", "", fmt.Errorf("read theirs: %w", err)
+	}
+	return base, ours, theirs, nil
+}
+
+// MarkResolved writes the resolved content to a conflicted file and stages it.
+func (r *Repository) MarkResolved(filePath string, content string) error {
+	fullPath := filepath.Join(r.path, filePath)
+	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("write resolved file: %w", err)
+	}
+	cmd := exec.Command("git", "add", filePath)
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stage resolved file: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("marked resolved", "path", filePath)
+	return nil
+}
+
+// AbortMerge cancels an in-progress merge.
+func (r *Repository) AbortMerge() error {
+	cmd := exec.Command("git", "merge", "--abort")
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("abort merge: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("merge aborted")
+	return nil
+}
+
+// LaunchExternalMergeTool writes base/ours/theirs to temp files and
+// launches the configured external merge tool command. It returns the
+// merged content after the external tool exits.
+func LaunchExternalMergeTool(command, repoPath, filePath, base, ours, theirs string) (string, error) {
+	tmpDir, err := os.MkdirTemp("", "gitk-merge-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	basePath := filepath.Join(tmpDir, "BASE_"+filepath.Base(filePath))
+	oursPath := filepath.Join(tmpDir, "LOCAL_"+filepath.Base(filePath))
+	theirsPath := filepath.Join(tmpDir, "REMOTE_"+filepath.Base(filePath))
+	mergedPath := filepath.Join(repoPath, filePath)
+
+	if err := os.WriteFile(basePath, []byte(base), 0644); err != nil {
+		return "", fmt.Errorf("write base: %w", err)
+	}
+	if err := os.WriteFile(oursPath, []byte(ours), 0644); err != nil {
+		return "", fmt.Errorf("write ours: %w", err)
+	}
+	if err := os.WriteFile(theirsPath, []byte(theirs), 0644); err != nil {
+		return "", fmt.Errorf("write theirs: %w", err)
+	}
+
+	// Replace placeholders in the command.
+	cmdStr := command
+	cmdStr = strings.ReplaceAll(cmdStr, "%b", basePath)
+	cmdStr = strings.ReplaceAll(cmdStr, "%l", oursPath)
+	cmdStr = strings.ReplaceAll(cmdStr, "%r", theirsPath)
+	cmdStr = strings.ReplaceAll(cmdStr, "%m", mergedPath)
+
+	// If no placeholders were used, append the standard 3-file arguments.
+	if !strings.Contains(command, "%") {
+		cmdStr = command + " " + oursPath + " " + mergedPath + " " + theirsPath
+	}
+
+	cmd := exec.Command("sh", "-c", cmdStr)
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("external merge tool: %s", strings.TrimSpace(string(out)))
+	}
+
+	// Read the merged result from the working tree file.
+	merged, err := os.ReadFile(mergedPath)
+	if err != nil {
+		return "", fmt.Errorf("read merged file: %w", err)
+	}
+	return string(merged), nil
 }
 
 // AddRemote adds a new remote to the repository.

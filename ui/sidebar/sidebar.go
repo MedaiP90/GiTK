@@ -29,6 +29,8 @@ import (
 	"github.com/MedaiP90/GiTK/config"
 	"github.com/MedaiP90/GiTK/git"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
+	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
+	"github.com/diamondburned/gotk4/pkg/gdk/v4"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
@@ -415,7 +417,6 @@ func (s *Sidebar) RefreshBranches() {
 	for i, branch := range localBranches {
 		isCurrent := branch.Name == currentBranch
 		branchName := branch.Name
-		idx := i
 
 		var actions BranchActions
 		if !isCurrent {
@@ -443,8 +444,8 @@ func (s *Sidebar) RefreshBranches() {
 			}
 		})
 
-		// Add Up/Down reorder buttons.
-		s.addReorderButtons(row, branchName, idx, len(localBranches))
+		// Add drag-and-drop for reordering.
+		s.addDragAndDrop(row, branchName)
 
 		// Add some spacing at the end of the list.
 		if i == len(localBranches) - 1 {
@@ -672,78 +673,83 @@ func (s *Sidebar) sortBranchesByOrder(branches []git.BranchInfo) []git.BranchInf
 	return append(ordered, unordered...)
 }
 
-// addReorderButtons adds Up and Down suffix buttons to a branch row so the
-// user can reorder local branches. The order is persisted in cfg.BranchOrder.
-func (s *Sidebar) addReorderButtons(row interface{ AddSuffix(gtk.Widgetter) }, branchName string, idx, total int) {
-	upBtn := gtk.NewButtonFromIconName("go-up-symbolic")
-	upBtn.SetTooltipText("Move up")
-	upBtn.AddCSSClass("flat")
-	upBtn.SetVAlign(gtk.AlignCenter)
-	upBtn.SetSensitive(idx > 0)
-	upBtn.ConnectClicked(func() {
-		s.moveBranch(branchName, -1)
+// addDragAndDrop attaches GTK4 DragSource and DropTarget controllers to a
+// branch row for reordering via drag-and-drop.
+func (s *Sidebar) addDragAndDrop(row *adw.ActionRow, branchName string) {
+	// DragSource: initiated when the user starts dragging this row.
+	dragSrc := gtk.NewDragSource()
+	dragSrc.SetActions(gdk.ActionMove)
+	dragSrc.ConnectPrepare(func(x, y float64) *gdk.ContentProvider {
+		val := coreglib.NewValue(branchName)
+		return gdk.NewContentProviderForValue(val)
 	})
-
-	downBtn := gtk.NewButtonFromIconName("go-down-symbolic")
-	downBtn.SetTooltipText("Move down")
-	downBtn.AddCSSClass("flat")
-	downBtn.SetVAlign(gtk.AlignCenter)
-	downBtn.SetSensitive(idx < total-1)
-	downBtn.ConnectClicked(func() {
-		s.moveBranch(branchName, +1)
+	dragSrc.ConnectDragBegin(func(drag gdk.Dragger) {
+		row.AddCSSClass("dragging")
 	})
+	dragSrc.ConnectDragEnd(func(drag gdk.Dragger, deleteData bool) {
+		row.RemoveCSSClass("dragging")
+	})
+	row.AddController(dragSrc)
 
-	row.AddSuffix(upBtn)
-	row.AddSuffix(downBtn)
+	// DropTarget: accepts drops from other branch rows.
+	dropTarget := gtk.NewDropTarget(coreglib.TypeString, gdk.ActionMove)
+	dropTarget.ConnectDrop(func(value *coreglib.Value, x, y float64) bool {
+		draggedName, ok := value.GoValue().(string)
+		if !ok || draggedName == branchName {
+			return false
+		}
+		s.reorderBranch(draggedName, branchName)
+		return true
+	})
+	dropTarget.ConnectEnter(func(x, y float64) gdk.DragAction {
+		row.AddCSSClass("drop-target")
+		return gdk.ActionMove
+	})
+	dropTarget.ConnectLeave(func() {
+		row.RemoveCSSClass("drop-target")
+	})
+	row.AddController(dropTarget)
 }
 
-// moveBranch moves branchName by delta (+1 down, -1 up) in cfg.BranchOrder
-// and refreshes the branch list.
-func (s *Sidebar) moveBranch(branchName string, delta int) {
-	// Ensure all local branches are represented in the order list.
-	// Get current local branches to build a full order.
+// reorderBranch moves draggedBranch to the position of targetBranch
+// in the branch order, then persists and refreshes.
+func (s *Sidebar) reorderBranch(draggedBranch, targetBranch string) {
 	branches, err := s.repo.Branches()
 	if err != nil {
 		return
 	}
 
-	// Build full local branch list in current display order.
-	var localNames []string
-	{
-		var local []git.BranchInfo
-		for _, b := range branches {
-			if !b.IsRemote {
-				local = append(local, b)
-			}
-		}
-		local = s.sortBranchesByOrder(local)
-		for _, b := range local {
-			localNames = append(localNames, b.Name)
+	var local []git.BranchInfo
+	for _, b := range branches {
+		if !b.IsRemote {
+			local = append(local, b)
 		}
 	}
+	local = s.sortBranchesByOrder(local)
 
-	// Find current position.
-	cur := -1
-	for i, n := range localNames {
-		if n == branchName {
-			cur = i
-			break
+	var names []string
+	for _, b := range local {
+		names = append(names, b.Name)
+	}
+
+	// Remove dragged branch from its current position.
+	var filtered []string
+	for _, n := range names {
+		if n != draggedBranch {
+			filtered = append(filtered, n)
 		}
 	}
-	if cur < 0 {
-		return
+
+	// Insert before the target branch.
+	var result []string
+	for _, n := range filtered {
+		if n == targetBranch {
+			result = append(result, draggedBranch)
+		}
+		result = append(result, n)
 	}
 
-	target := cur + delta
-	if target < 0 || target >= len(localNames) {
-		return
-	}
-
-	// Swap.
-	localNames[cur], localNames[target] = localNames[target], localNames[cur]
-
-	// Save new order.
-	s.cfg.BranchOrder = localNames
+	s.cfg.BranchOrder = result
 	if err := s.cfg.Save(); err != nil {
 		slog.Warn("failed to save branch order", "error", err)
 	}
