@@ -91,8 +91,8 @@ type StagingView struct {
 	// charCounter shows the subject line character count.
 	charCounter *gtk.Label
 
-	// toastOverlay for inline notifications.
-	toastOverlay *adw.ToastOverlay
+	// showToastFn is a callback to show toast notifications via the window-level overlay.
+	showToastFn func(string)
 
 	// hasStagedFiles tracks whether any files are currently staged.
 	hasStagedFiles bool
@@ -106,12 +106,13 @@ type StagingView struct {
 // Parameters:
 //   - cfg: the app configuration.
 //   - onCommitCreated: callback after a successful commit.
-func New(cfg *config.Config, onCommitCreated OnCommitCreated, onStashRequested OnStashRequested, onChangesUpdated OnChangesUpdated) *StagingView {
+func New(cfg *config.Config, onCommitCreated OnCommitCreated, onStashRequested OnStashRequested, onChangesUpdated OnChangesUpdated, showToast func(string)) *StagingView {
 	sv := &StagingView{
 		cfg:              cfg,
 		onCommitCreated:  onCommitCreated,
 		onStashRequested: onStashRequested,
 		onChangesUpdated: onChangesUpdated,
+		showToastFn:      showToast,
 	}
 
 	sv.build()
@@ -231,13 +232,9 @@ func (sv *StagingView) build() {
 	paned.SetShrinkStartChild(false)
 	paned.SetShrinkEndChild(false)
 
-	// --- Toast overlay ---
-	sv.toastOverlay = adw.NewToastOverlay()
-	sv.toastOverlay.SetChild(paned)
-
 	// --- Assemble ---
 	sv.Root = adw.NewToolbarView()
-	sv.Root.SetContent(sv.toastOverlay)
+	sv.Root.SetContent(paned)
 }
 
 // buildCommitArea creates the commit message (subject + description) and
@@ -829,10 +826,9 @@ func formatCharCount(count int) string {
 	return string(rune('0'+tens)) + string(rune('0'+ones)) + " / 72"
 }
 
-// showToast shows a toast notification in the staging view.
+// showToast shows a toast notification via the window-level overlay.
 func (sv *StagingView) showToast(message string) {
-	toast := adw.NewToast(message)
-	sv.toastOverlay.AddToast(toast)
+	sv.showToastFn(message)
 }
 
 // clearListBox removes all rows from a GtkListBox.
