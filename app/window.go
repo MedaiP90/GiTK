@@ -334,6 +334,31 @@ func (w *Window) buildContentHeader() *adw.HeaderBar {
 	bar.PackStart(stashWrap)
 
 	// --- Remote operations ---
+	pushBtn := gtk.NewButtonFromIconName("send-to-symbolic")
+	pushBtn.SetTooltipText("Push")
+	pushBtn.ConnectClicked(func() {
+		if w.repo != nil {
+			dialogs.ShowPushDialog(w.window, w.repo, func(msg string) {
+				w.ShowToast(msg)
+			})
+		}
+	})
+	bar.PackEnd(pushBtn)
+
+	pullBtn := gtk.NewButtonFromIconName("go-down-symbolic")
+	pullBtn.SetTooltipText("Pull")
+	pullBtn.ConnectClicked(func() {
+		if w.repo != nil {
+			dialogs.ShowPullDialog(w.window, w.repo, func(msg string) {
+				w.ShowToast(msg)
+				if w.repo != nil {
+					w.commitLog.SetRepository(w.repo)
+				}
+			})
+		}
+	})
+	bar.PackEnd(pullBtn)
+
 	fetchBtn := gtk.NewButtonFromIconName("emblem-synchronizing-symbolic")
 	fetchBtn.SetTooltipText("Fetch")
 	fetchBtn.ConnectClicked(func() {
@@ -354,31 +379,6 @@ func (w *Window) buildContentHeader() *adw.HeaderBar {
 		}()
 	})
 	bar.PackEnd(fetchBtn)
-
-	pullBtn := gtk.NewButtonFromIconName("go-down-symbolic")
-	pullBtn.SetTooltipText("Pull")
-	pullBtn.ConnectClicked(func() {
-		if w.repo != nil {
-			dialogs.ShowPullDialog(w.window, w.repo, func(msg string) {
-				w.ShowToast(msg)
-				if w.repo != nil {
-					w.commitLog.SetRepository(w.repo)
-				}
-			})
-		}
-	})
-	bar.PackEnd(pullBtn)
-
-	pushBtn := gtk.NewButtonFromIconName("send-to-symbolic")
-	pushBtn.SetTooltipText("Push")
-	pushBtn.ConnectClicked(func() {
-		if w.repo != nil {
-			dialogs.ShowPushDialog(w.window, w.repo, func(msg string) {
-				w.ShowToast(msg)
-			})
-		}
-	})
-	bar.PackEnd(pushBtn)
 
 	return bar
 }
