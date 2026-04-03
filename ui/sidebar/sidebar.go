@@ -139,6 +139,7 @@ type Sidebar struct {
 //   - cfg: application configuration (for recent repositories list).
 //   - onRepoSelected: callback when a repository is selected.
 //   - onBranchSelected: callback when a branch is selected.
+//
 // SidebarCallbacks groups all optional action callbacks for the sidebar.
 type SidebarCallbacks struct {
 	OnRepoSelected    OnRepoSelected
@@ -379,11 +380,26 @@ func (s *Sidebar) RefreshBranches() {
 	localExpander.SetTitle("Local")
 	localExpander.SetIconName("vcs-branch-symbolic")
 	localExpander.SetExpanded(true)
+	localExpander.SetMarginBottom(12) // expanded by default
+	localExpander.Connect("notify::expanded", func() {
+		if localExpander.Expanded() {
+			localExpander.SetMarginBottom(12)
+		} else {
+			localExpander.SetMarginBottom(0)
+		}
+	})
 
 	remoteExpander := adw.NewExpanderRow()
 	remoteExpander.SetTitle("Remote")
 	remoteExpander.SetIconName("network-server-symbolic")
 	remoteExpander.SetExpanded(false)
+	remoteExpander.Connect("notify::expanded", func() {
+		if remoteExpander.Expanded() {
+			remoteExpander.SetMarginBottom(12)
+		} else {
+			remoteExpander.SetMarginBottom(0)
+		}
+	})
 
 	// "Add Remote" button on the Remote branches expander header.
 	addRemoteBtn := gtk.NewButtonFromIconName("list-add-symbolic")
@@ -476,6 +492,13 @@ func (s *Sidebar) RefreshBranches() {
 	tagsExpander.SetTitle("Tags")
 	tagsExpander.SetIconName("tag-symbolic")
 	tagsExpander.SetExpanded(false)
+	tagsExpander.Connect("notify::expanded", func() {
+		if tagsExpander.Expanded() {
+			tagsExpander.SetMarginBottom(12)
+		} else {
+			tagsExpander.SetMarginBottom(0)
+		}
+	})
 
 	for _, tag := range tags {
 		tagName := tag.Name
@@ -502,6 +525,13 @@ func (s *Sidebar) RefreshBranches() {
 	submodulesExpander.SetIconName("package-x-generic-symbolic")
 	submodulesExpander.SetExpanded(false)
 	submodulesExpander.SetSubtitle(formatCount(len(submodules)))
+	submodulesExpander.Connect("notify::expanded", func() {
+		if submodulesExpander.Expanded() {
+			submodulesExpander.SetMarginBottom(12)
+		} else {
+			submodulesExpander.SetMarginBottom(0)
+		}
+	})
 
 	// "Update All" button.
 	updateSubmodulesBtn := gtk.NewButtonFromIconName("view-refresh-symbolic")
@@ -595,7 +625,6 @@ func (s *Sidebar) openRepo(path string) {
 		s.onRepoSelected(repo)
 	}
 }
-
 
 // NewRepoRow creates a row for the recent repositories list.
 // It shows the repository name and path.

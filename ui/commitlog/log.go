@@ -27,8 +27,8 @@ import (
 	"time"
 
 	"github.com/MedaiP90/GiTK/git"
-	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
+	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
 
@@ -260,7 +260,6 @@ func (cl *CommitLog) setCommits(commits []git.CommitInfo) {
 
 	slog.Debug("commit log updated", "count", len(commits))
 }
-
 
 // applyFilter filters the displayed commits by the search text.
 func (cl *CommitLog) applyFilter(query string) {
@@ -535,6 +534,7 @@ func (cl *CommitLog) addRefsColumn() {
 func createRefPill(ref git.GraphRef, currentBranch string) *gtk.Label {
 	pill := gtk.NewLabel(ref.Name)
 	pill.AddCSSClass("caption")
+	pill.AddCSSClass("ref-chip")
 
 	// Style based on ref kind.
 	switch ref.Kind {
@@ -543,14 +543,14 @@ func createRefPill(ref git.GraphRef, currentBranch string) *gtk.Label {
 			// Checked-out branch: solid accent chip for maximum visibility.
 			pill.AddCSSClass("current-branch-chip")
 		} else {
-			pill.AddCSSClass("accent")
+			pill.AddCSSClass("ref-chip-local")
 		}
 	case git.RefRemoteBranch:
-		pill.AddCSSClass("dim-label")
+		pill.AddCSSClass("ref-chip-remote")
 	case git.RefTag:
-		pill.AddCSSClass("warning")
+		pill.AddCSSClass("ref-chip-tag")
 	case git.RefHEAD:
-		pill.AddCSSClass("success")
+		pill.AddCSSClass("ref-chip-head")
 	}
 
 	return pill

@@ -39,8 +39,8 @@ import (
 	"github.com/MedaiP90/GiTK/ui/merge"
 	"github.com/MedaiP90/GiTK/ui/rebase"
 	"github.com/MedaiP90/GiTK/ui/sidebar"
-	"github.com/MedaiP90/GiTK/ui/stash"
 	"github.com/MedaiP90/GiTK/ui/staging"
+	"github.com/MedaiP90/GiTK/ui/stash"
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gdk/v4"
 	"github.com/diamondburned/gotk4/pkg/gio/v2"
@@ -101,6 +101,10 @@ type Window struct {
 	pullBtn  *gtk.Button
 	pushBtn  *gtk.Button
 
+	// progressBar is a pulsing progress bar shown during remote operations.
+	progressBar    *gtk.ProgressBar
+	progressTickID glib.SourceHandle
+
 	// stagingPage and stashPage are the AdwViewStackPage handles for the
 	// staging and stash tabs; used to update their badge numbers.
 	stagingPage *adw.ViewStackPage
@@ -153,6 +157,27 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 	// --- Load custom CSS ---
 	cssProvider := gtk.NewCSSProvider()
 	cssProvider.LoadFromString(`
+.ref-chip {
+	border-radius: 8px;
+	padding: 1px 7px;
+	font-size: 0.8em;
+}
+.ref-chip-local {
+	background-color: alpha(@accent_bg_color, 0.3);
+	color: @accent_fg_color;
+}
+.ref-chip-remote {
+	background-color: alpha(@window_fg_color, 0.1);
+	color: @window_fg_color;
+}
+.ref-chip-tag {
+	background-color: alpha(@warning_bg_color, 0.3);
+	color: @warning_fg_color;
+}
+.ref-chip-head {
+	background-color: alpha(@success_bg_color, 0.3);
+	color: @success_fg_color;
+}
 .current-branch-chip {
 	border-radius: 8px;
 	padding: 1px 7px;
@@ -251,7 +276,7 @@ func (w *Window) buildSidebarHeader() *adw.HeaderBar {
 //
 // Layout:
 //
-//	  [Log | Staging | Stash]   [⟳ Fetch] [↓ Pull] [↑ Push]
+//	[Log | Staging | Stash]   [⟳ Fetch] [↓ Pull] [↑ Push]
 //
 // The content header hides its start title buttons (mirror of the sidebar
 // header hiding its end title buttons).
@@ -272,21 +297,7 @@ func (w *Window) buildContentHeader(viewStack *adw.ViewStack) *adw.HeaderBar {
 	w.fetchBtn.SetTooltipText("Fetch")
 	w.fetchBtn.SetSensitive(false)
 	w.fetchBtn.ConnectClicked(func() {
-		if w.repo == nil {
-			return
-		}
-		go func() {
-			err := w.repo.Fetch()
-			glib.IdleAdd(func() {
-				if err != nil {
-					w.ShowToast("Fetch failed: " + err.Error())
-					return
-				}
-				w.ShowToast("Fetched from origin")
-				w.sidebar.RefreshBranches()
-				w.commitLog.SetRepository(w.repo)
-			})
-		}()
+		w.doFetch()
 	})
 
 	w.pullBtn = gtk.NewButtonFromIconName("go-down-symbolic")
@@ -298,6 +309,9 @@ func (w *Window) buildContentHeader(viewStack *adw.ViewStack) *adw.HeaderBar {
 				w.ShowToast(msg)
 				if w.repo != nil {
 					w.commitLog.SetRepository(w.repo)
+					if !strings.HasPrefix(msg, "Pull failed") {
+						w.doFetch()
+					}
 				}
 			})
 		}
@@ -310,16 +324,67 @@ func (w *Window) buildContentHeader(viewStack *adw.ViewStack) *adw.HeaderBar {
 		if w.repo != nil {
 			dialogs.ShowPushDialog(w.window, w.repo, func(msg string) {
 				w.ShowToast(msg)
+				if !strings.HasPrefix(msg, "Push failed") {
+					w.doFetch()
+				}
 			})
 		}
 	})
 
+	// Progress bar shown during remote operations (to the left of the buttons).
+	w.progressBar = gtk.NewProgressBar()
+	w.progressBar.SetVisible(false)
+	w.progressBar.SetVAlign(gtk.AlignCenter)
+	w.progressBar.SetSizeRequest(80, -1)
+
 	bar.PackEnd(w.pushBtn)
 	bar.PackEnd(w.pullBtn)
 	bar.PackEnd(w.fetchBtn)
-
+	bar.PackEnd(w.progressBar)
 
 	return bar
+}
+
+// doFetch runs a git fetch in the background with progress indication.
+func (w *Window) doFetch() {
+	if w.repo == nil {
+		return
+	}
+	w.ShowToast("Fetching…")
+	w.startProgress()
+	go func() {
+		err := w.repo.Fetch()
+		glib.IdleAdd(func() {
+			w.stopProgress()
+			if err != nil {
+				w.ShowToast("Fetch failed: " + err.Error())
+				return
+			}
+			w.ShowToast("Fetched from origin")
+			w.sidebar.RefreshBranches()
+			w.commitLog.SetRepository(w.repo)
+		})
+	}()
+}
+
+// startProgress shows and begins pulsing the header progress bar.
+func (w *Window) startProgress() {
+	w.progressBar.SetVisible(true)
+	w.progressBar.Pulse()
+	w.progressTickID = glib.TimeoutAdd(200, func() bool {
+		w.progressBar.Pulse()
+		return true
+	})
+}
+
+// stopProgress hides the progress bar and stops the pulse timer.
+func (w *Window) stopProgress() {
+	if w.progressTickID != 0 {
+		glib.SourceRemove(w.progressTickID)
+		w.progressTickID = 0
+	}
+	w.progressBar.SetFraction(0)
+	w.progressBar.SetVisible(false)
 }
 
 // switchToView switches the AdwViewStack to the named child.
