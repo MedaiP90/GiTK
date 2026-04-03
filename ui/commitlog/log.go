@@ -353,7 +353,6 @@ func (cl *CommitLog) addGraphColumn() {
 	col := gtk.NewColumnViewColumn("Graph", &factory.ListItemFactory)
 	col.SetFixedWidth(120)
 	col.SetResizable(false)
-	col.SetReorderable(false)
 	cl.columnView.AppendColumn(col)
 }
 
@@ -382,7 +381,6 @@ func (cl *CommitLog) addHashColumn() {
 	col := gtk.NewColumnViewColumn("Hash", &factory.ListItemFactory)
 	col.SetFixedWidth(80)
 	col.SetResizable(true)
-	col.SetReorderable(false)
 	cl.columnView.AppendColumn(col)
 }
 
@@ -411,7 +409,6 @@ func (cl *CommitLog) addSubjectColumn() {
 	col := gtk.NewColumnViewColumn("Subject", &factory.ListItemFactory)
 	col.SetFixedWidth(400)
 	col.SetResizable(true)
-	col.SetReorderable(false)
 	cl.columnView.AppendColumn(col)
 }
 
@@ -439,7 +436,6 @@ func (cl *CommitLog) addAuthorColumn() {
 	col := gtk.NewColumnViewColumn("Author", &factory.ListItemFactory)
 	col.SetFixedWidth(150)
 	col.SetResizable(true)
-	col.SetReorderable(false)
 	cl.columnView.AppendColumn(col)
 }
 
@@ -467,7 +463,6 @@ func (cl *CommitLog) addDateColumn() {
 	col := gtk.NewColumnViewColumn("Date", &factory.ListItemFactory)
 	col.SetFixedWidth(120)
 	col.SetResizable(true)
-	col.SetReorderable(false)
 	cl.columnView.AppendColumn(col)
 }
 
@@ -528,7 +523,6 @@ func (cl *CommitLog) addRefsColumn() {
 	col := gtk.NewColumnViewColumn("Refs", &factory.ListItemFactory)
 	col.SetFixedWidth(200)
 	col.SetResizable(true)
-	col.SetReorderable(false)
 	cl.columnView.AppendColumn(col)
 }
 
