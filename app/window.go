@@ -157,27 +157,6 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 	// --- Load custom CSS ---
 	cssProvider := gtk.NewCSSProvider()
 	cssProvider.LoadFromString(`
-.ref-chip {
-	border-radius: 8px;
-	padding: 1px 7px;
-	font-size: 0.8em;
-}
-.ref-chip-local {
-	background-color: alpha(@accent_bg_color, 0.3);
-	color: @accent_fg_color;
-}
-.ref-chip-remote {
-	background-color: alpha(@window_fg_color, 0.1);
-	color: @window_fg_color;
-}
-.ref-chip-tag {
-	background-color: alpha(@warning_bg_color, 0.3);
-	color: @warning_fg_color;
-}
-.ref-chip-head {
-	background-color: alpha(@success_bg_color, 0.3);
-	color: @success_fg_color;
-}
 .current-branch-chip {
 	border-radius: 8px;
 	padding: 1px 7px;

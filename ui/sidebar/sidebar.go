@@ -461,10 +461,15 @@ func (s *Sidebar) RefreshBranches() {
 		// Add Up/Down reorder buttons.
 		s.addReorderButtons(row, branchName, idx, len(localBranches))
 
+		// Add some spacing at the end of the list.
+		if i == len(localBranches) - 1 {
+			row.SetMarginBottom(12)
+		}
+
 		localExpander.AddRow(row)
 	}
 
-	for _, branch := range remoteBranches {
+	for i, branch := range remoteBranches {
 		branchName := branch.Name
 		row := NewBranchRow(branch, false, BranchActions{})
 		row.ConnectActivated(func() {
@@ -472,6 +477,12 @@ func (s *Sidebar) RefreshBranches() {
 				s.onBranchSelected(branchName, true)
 			}
 		})
+
+		// Add some spacing at the end of the list.
+		if i == len(remoteBranches) - 1 {
+			row.SetMarginBottom(12)
+		}
+
 		remoteExpander.AddRow(row)
 	}
 
@@ -500,7 +511,7 @@ func (s *Sidebar) RefreshBranches() {
 		}
 	})
 
-	for _, tag := range tags {
+	for i, tag := range tags {
 		tagName := tag.Name
 		onTagDelete := func() {
 			if s.onTagDelete != nil {
@@ -508,6 +519,12 @@ func (s *Sidebar) RefreshBranches() {
 			}
 		}
 		row := NewTagRow(tag, onTagDelete)
+
+		// Add some spacing at the end of the list.
+		if i == len(tags) - 1 {
+			row.SetMarginBottom(12)
+		}
+
 		tagsExpander.AddRow(row)
 	}
 
@@ -557,7 +574,7 @@ func (s *Sidebar) RefreshBranches() {
 	})
 	submodulesExpander.AddSuffix(addSubmoduleBtn)
 
-	for _, sm := range submodules {
+	for i, sm := range submodules {
 		smPath := sm.Path
 		smRow := adw.NewActionRow()
 		smRow.SetTitle(sm.Name)
@@ -580,6 +597,11 @@ func (s *Sidebar) RefreshBranches() {
 			}
 		})
 		smRow.AddSuffix(removeBtn)
+
+		// Add some spacing at the end of the list.
+		if i == len(submodules) - 1 {
+			smRow.SetMarginBottom(12)
+		}
 
 		submodulesExpander.AddRow(smRow)
 	}

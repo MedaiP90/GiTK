@@ -534,7 +534,6 @@ func (cl *CommitLog) addRefsColumn() {
 func createRefPill(ref git.GraphRef, currentBranch string) *gtk.Label {
 	pill := gtk.NewLabel(ref.Name)
 	pill.AddCSSClass("caption")
-	pill.AddCSSClass("ref-chip")
 
 	// Style based on ref kind.
 	switch ref.Kind {
@@ -543,14 +542,14 @@ func createRefPill(ref git.GraphRef, currentBranch string) *gtk.Label {
 			// Checked-out branch: solid accent chip for maximum visibility.
 			pill.AddCSSClass("current-branch-chip")
 		} else {
-			pill.AddCSSClass("ref-chip-local")
+			pill.AddCSSClass("accent")
 		}
 	case git.RefRemoteBranch:
-		pill.AddCSSClass("ref-chip-remote")
+		pill.AddCSSClass("dim-label")
 	case git.RefTag:
-		pill.AddCSSClass("ref-chip-tag")
+		pill.AddCSSClass("warning")
 	case git.RefHEAD:
-		pill.AddCSSClass("ref-chip-head")
+		pill.AddCSSClass("current-branch-chip")
 	}
 
 	return pill
