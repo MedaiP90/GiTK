@@ -60,6 +60,7 @@ type Window struct {
 	// toastOverlay wraps the main content and provides a place to show
 	// non-blocking toast notifications (e.g., "Pushed to origin/main").
 	toastOverlay *adw.ToastOverlay
+	currentToast *adw.Toast
 
 	// contentStack is the AdwViewStack that switches between the main views.
 	// It is connected to an AdwViewSwitcher in the content header bar.
@@ -206,10 +207,15 @@ func (w *Window) Present() {
 //
 // Example: w.ShowToast("Pushed 3 commits to origin/main")
 func (w *Window) ShowToast(message string) {
-	toast := adw.NewToast(message)
+  // If a toast is already visible, dismiss it before showing the new one.
+  if w.currentToast != nil {
+    w.currentToast.Dismiss()
+  }
+  // Create and show the new toast.
+	w.currentToast = adw.NewToast(message)
 	// Toasts auto-dismiss after a few seconds. The default timeout is fine
 	// for most messages.
-	w.toastOverlay.AddToast(toast)
+	w.toastOverlay.AddToast(w.currentToast)
 }
 
 // buildSidebarHeader creates the AdwHeaderBar that lives inside the sidebar's
