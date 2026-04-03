@@ -689,13 +689,15 @@ func (r *Repository) Remotes() ([]RemoteInfo, error) {
 	return result, nil
 }
 
-// Fetch fetches from all remotes.
-func (r *Repository) Fetch() error {
+// Fetch fetches from all remotes. When prune is true, remote-tracking
+// branches that no longer exist on the remote are removed.
+func (r *Repository) Fetch(prune bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	err := r.repo.Fetch(&gogit.FetchOptions{
 		RemoteName: "origin",
+		Prune:      prune,
 	})
 	if err != nil && err != gogit.NoErrAlreadyUpToDate {
 		return fmt.Errorf("fetch: %w", err)

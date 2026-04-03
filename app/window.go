@@ -72,6 +72,9 @@ type Window struct {
 	// sidebar is the left sidebar with repositories and branches.
 	sidebar *sidebar.Sidebar
 
+	// sidebarTitle is the label in the sidebar header showing the current repo name.
+	sidebarTitle *gtk.Label
+
 	// commitLog is the commit history table view.
 	commitLog *commitlog.CommitLog
 
@@ -249,6 +252,10 @@ func (w *Window) buildSidebarHeader() *adw.HeaderBar {
 	cloneBtn.ConnectClicked(func() { w.onCloneRepository() })
 	header.PackStart(cloneBtn)
 
+	// --- Center: Repository name title ---
+	w.sidebarTitle = gtk.NewLabel("GiTK")
+	header.SetTitleWidget(w.sidebarTitle)
+
 	// --- Right: Primary hamburger menu ---
 	menuBtn := w.buildPrimaryMenu()
 	header.PackEnd(menuBtn)
@@ -342,7 +349,7 @@ func (w *Window) doFetch() {
 	w.ShowToast("Fetching…")
 	w.startProgress()
 	go func() {
-		err := w.repo.Fetch()
+		err := w.repo.Fetch(w.cfg.Git.PruneOnFetch)
 		glib.IdleAdd(func() {
 			w.stopProgress()
 			if err != nil {
@@ -522,7 +529,7 @@ func (w *Window) buildContentArea() {
 		}
 	}, func() {
 		w.updateStagingBadge()
-	})
+	}, w.ShowToast)
 	w.stagingPage = w.contentStack.AddTitledWithIcon(
 		w.stagingView.Root, "staging", "Staging", "document-edit-symbolic",
 	)
@@ -647,6 +654,7 @@ func (w *Window) onRepoSelected(repo *git.Repository) {
 	w.fileHistoryView.SetRepository(repo)
 	w.rebaseView.SetRepository(repo)
 	w.window.SetTitle(repo.Name())
+	w.sidebarTitle.SetLabel(repo.Name())
 
 	// Enable remote-operation buttons now that a repo is open.
 	w.fetchBtn.SetSensitive(true)
@@ -730,35 +738,87 @@ func (w *Window) onBranchSelected(branchName string, isRemote bool) {
 			if response != "track" {
 				return
 			}
-			go func() {
-				err := w.repo.CheckoutTrack(branchName)
-				glib.IdleAdd(func() {
-					if err != nil {
-						slog.Warn("checkout track failed", "branch", branchName, "error", err)
-						w.ShowToast("Checkout failed: " + err.Error())
-						return
-					}
-					w.ShowToast("Switched to " + branchName)
-					w.commitLog.SetRepository(w.repo)
-					w.sidebar.RefreshBranches()
-				})
-			}()
+			w.switchBranch(branchName, func() error {
+				return w.repo.CheckoutTrack(branchName)
+			})
 		})
 		dialog.Present(w.window)
 		return
 	}
 
+	w.switchBranch(branchName, func() error {
+		return w.repo.Checkout(branchName)
+	})
+}
+
+// switchBranch checks for uncommitted changes before switching branches.
+// If the worktree is dirty it asks the user whether to stash, switch, and reapply.
+// checkoutFn performs the actual checkout (Checkout or CheckoutTrack).
+func (w *Window) switchBranch(branchName string, checkoutFn func() error) {
 	go func() {
-		err := w.repo.Checkout(branchName)
+		changes, _ := w.repo.Status()
 		glib.IdleAdd(func() {
-			if err != nil {
-				slog.Warn("checkout failed", "branch", branchName, "error", err)
-				w.ShowToast("Checkout failed: " + err.Error())
+			if len(changes) == 0 {
+				w.doSwitchBranch(branchName, checkoutFn, false)
 				return
 			}
-			w.ShowToast("Switched to " + branchName)
+			// Uncommitted changes: ask the user.
+			dialog := adw.NewAlertDialog(
+				"Uncommitted Changes",
+				"You have uncommitted changes. Stash them, switch branch, and reapply?",
+			)
+			dialog.AddResponse("cancel", "Cancel")
+			dialog.AddResponse("stash", "Stash & Switch")
+			dialog.SetResponseAppearance("stash", adw.ResponseSuggested)
+			dialog.SetDefaultResponse("stash")
+			dialog.SetCloseResponse("cancel")
+			dialog.ConnectResponse(func(response string) {
+				if response != "stash" {
+					return
+				}
+				w.doSwitchBranch(branchName, checkoutFn, true)
+			})
+			dialog.Present(w.window)
+		})
+	}()
+}
+
+// doSwitchBranch performs the branch switch, optionally stashing and reapplying changes.
+func (w *Window) doSwitchBranch(branchName string, checkoutFn func() error, stash bool) {
+	go func() {
+		if stash {
+			if err := w.repo.StashSave("Auto-stash before switching to " + branchName); err != nil {
+				glib.IdleAdd(func() {
+					w.ShowToast("Stash failed: " + err.Error())
+				})
+				return
+			}
+		}
+
+		err := checkoutFn()
+		if err != nil {
+			glib.IdleAdd(func() {
+				slog.Warn("checkout failed", "branch", branchName, "error", err)
+				w.ShowToast("Checkout failed: " + err.Error())
+			})
+			return
+		}
+
+		var popErr error
+		if stash {
+			popErr = w.repo.StashPop(0)
+		}
+
+		glib.IdleAdd(func() {
+			if popErr != nil {
+				w.ShowToast("Switched to " + branchName + " (stash conflicts — changes remain in stash)")
+			} else {
+				w.ShowToast("Switched to " + branchName)
+			}
 			w.commitLog.SetRepository(w.repo)
 			w.sidebar.RefreshBranches()
+			w.updateStagingBadge()
+			w.updateStashChip()
 		})
 	}()
 }
