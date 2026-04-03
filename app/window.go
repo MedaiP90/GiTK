@@ -1,25 +1,23 @@
 // Package app — window.go defines the main application window layout.
 //
-// The window uses the standard GNOME HIG layout:
-//
-//	┌──────────────────────────────────────────────────────┐
-//	│  AdwHeaderBar  [Open] [Clone]    GiTK    [≡ Menu]   │
-//	├────────────┬─────────────────────────────────────────┤
-//	│  Sidebar   │  Content area                          │
-//	│  (repos,   │  (commit log, staging, graph, etc.)    │
-//	│  branches) │                                         │
-//	│            │                                         │
-//	└────────────┴─────────────────────────────────────────┘
-//
-// The root widget hierarchy is:
+// The window uses the GNOME HIG NavigationSplitView pattern where each pane
+// owns its own header bar.  There is no global header bar spanning both panes.
 //
 //	AdwApplicationWindow
-//	 └─ AdwToolbarView
-//	     ├─ [top] AdwHeaderBar
-//	     └─ [content] AdwToastOverlay
-//	          └─ AdwNavigationSplitView
-//	               ├─ [sidebar] AdwNavigationPage → sidebar content
-//	               └─ [content] AdwNavigationPage → main content stack
+//	 └─ AdwToastOverlay
+//	      └─ AdwNavigationSplitView
+//	           ├─ [sidebar] AdwNavigationPage
+//	           │    └─ AdwToolbarView
+//	           │         ├─ [top] AdwHeaderBar [Open][Clone] … [≡]
+//	           │         └─ sidebar content (recent repos, branches)
+//	           └─ [content] AdwNavigationPage
+//	                └─ AdwToolbarView
+//	                     ├─ [top] AdwHeaderBar [Log|Staging|Stash] [⟳][↓][↑]
+//	                     └─ AdwViewStack
+//	                          ├─ "log"     → AdwToolbarView → GtkPaned
+//	                          ├─ "staging" → StagingView (AdwToolbarView → GtkPaned)
+//	                          ├─ "stash"   → StashView
+//	                          └─ sub-views (merge, blame, filehistory, rebase)
 package app
 
 import (
@@ -59,16 +57,13 @@ type Window struct {
 	// window is the AdwApplicationWindow — the root GTK window.
 	window *adw.ApplicationWindow
 
-	// headerBar is the top header bar with title and action buttons.
-	headerBar *adw.HeaderBar
-
 	// toastOverlay wraps the main content and provides a place to show
 	// non-blocking toast notifications (e.g., "Pushed to origin/main").
 	toastOverlay *adw.ToastOverlay
 
-	// contentStack switches between different views in the main content
-	// area: commit log, staging area, graph view, etc.
-	contentStack *gtk.Stack
+	// contentStack is the AdwViewStack that switches between the main views.
+	// It is connected to an AdwViewSwitcher in the content header bar.
+	contentStack *adw.ViewStack
 
 	// statusPage is the welcome/empty state shown when no repository is open.
 	statusPage *adw.StatusPage
@@ -79,7 +74,7 @@ type Window struct {
 	// commitLog is the commit history table view.
 	commitLog *commitlog.CommitLog
 
-	// commitDetail is the commit detail panel (right side).
+	// commitDetail is the commit detail panel (right side of the log pane).
 	commitDetail *commitdetail.CommitDetail
 
 	// stagingView is the staging area view.
@@ -100,17 +95,16 @@ type Window struct {
 	// rebaseView is the interactive rebase UI.
 	rebaseView *rebase.RebaseView
 
-	// logBtn and stagingBtn are header bar toggle buttons, kept as fields
-	// so we can update their active state.
-	logBtn     *gtk.ToggleButton
-	stagingBtn *gtk.ToggleButton
-	stashBtn   *gtk.ToggleButton
+	// fetchBtn, pullBtn, pushBtn are the remote-operation buttons in the
+	// content header bar.  They are disabled until a repository is opened.
+	fetchBtn *gtk.Button
+	pullBtn  *gtk.Button
+	pushBtn  *gtk.Button
 
-	// stagingChip is the external pill label showing "N changes" next to stagingBtn.
-	stagingChip *gtk.Label
-
-	// stashChip is the external pill label showing "N stashed" next to stashBtn.
-	stashChip *gtk.Label
+	// stagingPage and stashPage are the AdwViewStackPage handles for the
+	// staging and stash tabs; used to update their badge numbers.
+	stagingPage *adw.ViewStackPage
+	stashPage   *adw.ViewStackPage
 
 	// repo is the currently open git repository (nil if none).
 	repo *git.Repository
@@ -159,14 +153,6 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 	// --- Load custom CSS ---
 	cssProvider := gtk.NewCSSProvider()
 	cssProvider.LoadFromString(`
-.staging-btn-wrap { background: transparent; }
-.changes-chip {
-	border-radius: 12px;
-	padding: 2px 8px;
-	background-color: alpha(@accent_bg_color, 0.15);
-	color: @accent_color;
-	font-size: 0.8em;
-}
 .current-branch-chip {
 	border-radius: 8px;
 	padding: 1px 7px;
@@ -181,22 +167,16 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 		gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
 	)
 
-	// --- Build the header bar ---
-	w.headerBar = w.buildHeaderBar()
-
-	// --- Build the main content area ---
+	// --- Build all views and the navigation layout ---
+	// buildContentArea creates the sidebar, all content views, the
+	// AdwNavigationSplitView, and the ToastOverlay.  It also injects the
+	// sidebar header bar into sidebar.Root so the header lives inside the
+	// NavigationSplitView (GNOME HIG per-pane header pattern).
 	w.buildContentArea()
 
-	// --- Assemble the layout ---
-	// AdwToolbarView hosts the header bar at the top and content below.
-	// This is the recommended way to combine AdwHeaderBar with content
-	// in GNOME HIG.
-	toolbarView := adw.NewToolbarView()
-	toolbarView.AddTopBar(w.headerBar)
-	toolbarView.SetContent(w.toastOverlay)
-
-	// Set the toolbar view as the window's content.
-	w.window.SetContent(toolbarView)
+	// The ToastOverlay is the direct window content — no outer AdwToolbarView.
+	// Each NavigationPage manages its own AdwToolbarView + AdwHeaderBar.
+	w.window.SetContent(w.toastOverlay)
 
 	// Register window-scope actions (e.g., win.open-repo, win.clone).
 	w.registerWindowActions()
@@ -226,16 +206,25 @@ func (w *Window) ShowToast(message string) {
 	w.toastOverlay.AddToast(toast)
 }
 
-// buildHeaderBar creates the global AdwHeaderBar spanning the full window width.
+// buildSidebarHeader creates the AdwHeaderBar that lives inside the sidebar's
+// AdwToolbarView (the left NavigationPage of the AdwNavigationSplitView).
 //
-// Layout (GNOME HIG sidebar pattern — single header above NavigationSplitView):
+// GNOME HIG per-pane header pattern: each NavigationPage has its own header bar.
+// The sidebar header shows window-level actions (Open, Clone) and the primary
+// menu; the content header (built in buildContentArea) shows view-switcher and
+// remote-operation buttons.
 //
-//	[Open] [Clone]    GiTK    [≡ Menu]
+// Layout:
 //
-// Repository-specific actions (view switching, remote ops) live in the
-// content area's secondary toolbar, built inside buildContentArea().
-func (w *Window) buildHeaderBar() *adw.HeaderBar {
+//	[Open] [Clone]   Repositories   [≡ Menu]
+//
+// The sidebar header hides its end title buttons so that, when both panes are
+// visible, the window decoration buttons appear only once (on the content side).
+func (w *Window) buildSidebarHeader() *adw.HeaderBar {
 	header := adw.NewHeaderBar()
+	// On desktop with NavigationSplitView, hide the end (right-side) title
+	// buttons on the sidebar header so decorations don't appear twice.
+	header.SetShowEndTitleButtons(false)
 
 	// --- Left: Open and Clone buttons (always available) ---
 	openBtn := gtk.NewButtonFromIconName("folder-open-symbolic")
@@ -255,113 +244,34 @@ func (w *Window) buildHeaderBar() *adw.HeaderBar {
 	return header
 }
 
-// buildContentHeader creates the secondary header bar that lives inside the
-// content navigation page.  It carries the view-switcher (Log / Staging /
-// Stash) on the left and the remote-operation buttons (Fetch / Pull / Push)
-// on the right.
+// buildContentHeader creates the AdwHeaderBar that lives inside the content
+// NavigationPage's AdwToolbarView.  It uses AdwViewSwitcher as its title
+// widget to provide tab-style switching between Log, Staging, and Stash.
+// Remote-operation buttons (Fetch / Pull / Push) are packed on the right.
 //
 // Layout:
 //
-//	[Log] [Staging ↕] [Stash ≡]  ·····  [⟳ Fetch] [↓ Pull] [↑ Push]
-func (w *Window) buildContentHeader() *adw.HeaderBar {
+//	  [Log | Staging | Stash]   [⟳ Fetch] [↓ Pull] [↑ Push]
+//
+// The content header hides its start title buttons (mirror of the sidebar
+// header hiding its end title buttons).
+func (w *Window) buildContentHeader(viewStack *adw.ViewStack) *adw.HeaderBar {
 	bar := adw.NewHeaderBar()
-	bar.SetShowTitle(false)
+	// Hide start (left-side) title buttons on the content header — they are
+	// shown on the sidebar header instead.
 	bar.SetShowStartTitleButtons(false)
-	bar.SetShowEndTitleButtons(false)
 
-	// --- View switcher: Log ---
-	w.logBtn = gtk.NewToggleButton()
-	w.logBtn.SetIconName("view-list-symbolic")
-	w.logBtn.SetTooltipText("Commit Log")
-	w.logBtn.SetActive(false)
-	w.logBtn.SetSensitive(false)
-	w.logBtn.ConnectClicked(func() {
-		if w.repo != nil {
-			w.switchToView("log")
-		}
-	})
-	bar.PackStart(w.logBtn)
+	// --- Centre: AdwViewSwitcher connected to the view stack ---
+	switcher := adw.NewViewSwitcher()
+	switcher.SetStack(viewStack)
+	switcher.SetPolicy(adw.ViewSwitcherPolicyWide)
+	bar.SetTitleWidget(switcher)
 
-	// --- View switcher: Staging (with change-count chip) ---
-	w.stagingBtn = gtk.NewToggleButton()
-	w.stagingBtn.SetIconName("document-edit-symbolic")
-	w.stagingBtn.SetTooltipText("Staging Area")
-	w.stagingBtn.SetActive(false)
-	w.stagingBtn.SetSensitive(false)
-	w.stagingBtn.SetGroup(w.logBtn)
-	w.stagingBtn.ConnectClicked(func() {
-		if w.repo != nil {
-			w.stagingView.SetRepository(w.repo)
-			w.switchToView("staging")
-		}
-	})
-
-	w.stagingChip = gtk.NewLabel("")
-	w.stagingChip.AddCSSClass("changes-chip")
-	w.stagingChip.SetVisible(false)
-	w.stagingChip.SetVAlign(gtk.AlignCenter)
-
-	stagingWrap := gtk.NewBox(gtk.OrientationHorizontal, 4)
-	stagingWrap.AddCSSClass("staging-btn-wrap")
-	stagingWrap.SetVAlign(gtk.AlignCenter)
-	stagingWrap.Append(w.stagingBtn)
-	stagingWrap.Append(w.stagingChip)
-	bar.PackStart(stagingWrap)
-
-	// --- View switcher: Stash (with stash-count chip) ---
-	w.stashBtn = gtk.NewToggleButton()
-	w.stashBtn.SetIconName("sidebar-show-symbolic")
-	w.stashBtn.SetTooltipText("Stash")
-	w.stashBtn.SetActive(false)
-	w.stashBtn.SetSensitive(false)
-	w.stashBtn.SetGroup(w.logBtn)
-	w.stashBtn.ConnectClicked(func() {
-		if w.repo != nil {
-			w.stashView.RefreshStashes()
-			w.switchToView("stash")
-		}
-	})
-
-	w.stashChip = gtk.NewLabel("")
-	w.stashChip.AddCSSClass("changes-chip")
-	w.stashChip.SetVisible(false)
-	w.stashChip.SetVAlign(gtk.AlignCenter)
-
-	stashWrap := gtk.NewBox(gtk.OrientationHorizontal, 4)
-	stashWrap.SetVAlign(gtk.AlignCenter)
-	stashWrap.Append(w.stashBtn)
-	stashWrap.Append(w.stashChip)
-	bar.PackStart(stashWrap)
-
-	// --- Remote operations ---
-	pushBtn := gtk.NewButtonFromIconName("send-to-symbolic")
-	pushBtn.SetTooltipText("Push")
-	pushBtn.ConnectClicked(func() {
-		if w.repo != nil {
-			dialogs.ShowPushDialog(w.window, w.repo, func(msg string) {
-				w.ShowToast(msg)
-			})
-		}
-	})
-	bar.PackEnd(pushBtn)
-
-	pullBtn := gtk.NewButtonFromIconName("go-down-symbolic")
-	pullBtn.SetTooltipText("Pull")
-	pullBtn.ConnectClicked(func() {
-		if w.repo != nil {
-			dialogs.ShowPullDialog(w.window, w.repo, func(msg string) {
-				w.ShowToast(msg)
-				if w.repo != nil {
-					w.commitLog.SetRepository(w.repo)
-				}
-			})
-		}
-	})
-	bar.PackEnd(pullBtn)
-
-	fetchBtn := gtk.NewButtonFromIconName("emblem-synchronizing-symbolic")
-	fetchBtn.SetTooltipText("Fetch")
-	fetchBtn.ConnectClicked(func() {
+	// --- Right: Remote-operation buttons (disabled until a repo is open) ---
+	w.fetchBtn = gtk.NewButtonFromIconName("emblem-synchronizing-symbolic")
+	w.fetchBtn.SetTooltipText("Fetch")
+	w.fetchBtn.SetSensitive(false)
+	w.fetchBtn.ConnectClicked(func() {
 		if w.repo == nil {
 			return
 		}
@@ -378,29 +288,45 @@ func (w *Window) buildContentHeader() *adw.HeaderBar {
 			})
 		}()
 	})
-	bar.PackEnd(fetchBtn)
+	bar.PackEnd(w.fetchBtn)
+
+
+	w.pullBtn = gtk.NewButtonFromIconName("go-down-symbolic")
+	w.pullBtn.SetTooltipText("Pull")
+	w.pullBtn.SetSensitive(false)
+	w.pullBtn.ConnectClicked(func() {
+		if w.repo != nil {
+			dialogs.ShowPullDialog(w.window, w.repo, func(msg string) {
+				w.ShowToast(msg)
+				if w.repo != nil {
+					w.commitLog.SetRepository(w.repo)
+				}
+			})
+		}
+	})
+	bar.PackEnd(w.pullBtn)
+
+	w.pushBtn = gtk.NewButtonFromIconName("send-to-symbolic")
+	w.pushBtn.SetTooltipText("Push")
+	w.pushBtn.SetSensitive(false)
+	w.pushBtn.ConnectClicked(func() {
+		if w.repo != nil {
+			dialogs.ShowPushDialog(w.window, w.repo, func(msg string) {
+				w.ShowToast(msg)
+			})
+		}
+	})
+	bar.PackEnd(w.pushBtn)
+
 
 	return bar
 }
 
-// switchToView switches the content stack to the named view and updates
-// the toggle button states so only the active view's button is toggled.
+// switchToView switches the AdwViewStack to the named child.
+// The AdwViewSwitcher automatically reflects the active page — no manual
+// button state management required.
 func (w *Window) switchToView(name string) {
 	w.contentStack.SetVisibleChildName(name)
-
-	switch name {
-	case "log":
-		w.logBtn.SetActive(true)
-	case "staging":
-		w.stagingBtn.SetActive(true)
-	case "stash":
-		w.stashBtn.SetActive(true)
-	default:
-		// Sub-views (blame, filehistory, rebase, merge) — deactivate all three.
-		w.logBtn.SetActive(false)
-		w.stagingBtn.SetActive(false)
-		w.stashBtn.SetActive(false)
-	}
 }
 
 // buildPrimaryMenu creates the hamburger menu button (≡) with the app menu.
@@ -438,25 +364,30 @@ func newMenu() *gio.Menu {
 	return gio.NewMenu()
 }
 
-// buildContentArea constructs the main content area using AdwNavigationSplitView
-// (GNOME HIG sidebar pattern).  The single global AdwHeaderBar (built by
-// buildHeaderBar) spans the full window width; the NavigationSplitView sits
-// below it and divides the space into a collapsible sidebar (left) and a
-// content pane (right).
+// buildContentArea constructs the main layout using AdwNavigationSplitView
+// (GNOME HIG sidebar pattern).
 //
-// Content pane layout:
+// Each NavigationPage owns its own AdwToolbarView + AdwHeaderBar — the
+// header bars live *inside* the split view, not above it.
 //
-//	AdwToolbarView
-//	├── [top] content header bar (view switcher + remote ops)
-//	└── content stack (log | staging | stash | …)
-//
-// The pane for log+detail lives directly inside the content stack, so GTK
-// propagates the exact allocated width down to the GtkPaned — fixing the
-// resize synchronisation that was broken with the old GtkPaned+GtkStack
-// approach.
+//	AdwNavigationSplitView
+//	  ├─ [sidebar] AdwNavigationPage
+//	  │    └─ AdwToolbarView
+//	  │         ├─ [top] AdwHeaderBar [Open][Clone] … [≡]
+//	  │         └─ sidebar content (recent repos, branches)
+//	  └─ [content] AdwNavigationPage
+//	       └─ AdwToolbarView
+//	            ├─ [top] AdwHeaderBar [Log|Staging|Stash] … [⟳][↓][↑]
+//	            └─ AdwViewStack
+//	                 ├─ "log"     → AdwToolbarView → GtkPaned(table | detail)
+//	                 ├─ "staging" → StagingView.Root
+//	                 ├─ "stash"   → StashView.Root
+//	                 ├─ "merge"   → MergeView.Root   (hidden from switcher)
+//	                 ├─ "blame"   → BlameView.Root    (hidden from switcher)
+//	                 ├─ "filehistory" → …             (hidden from switcher)
+//	                 └─ "rebase"  → …                 (hidden from switcher)
 func (w *Window) buildContentArea() {
 	// --- Sidebar ---
-	// The sidebar shows recent repositories and branch tree.
 	w.sidebar = sidebar.New(w.cfg, sidebar.SidebarCallbacks{
 		OnRepoSelected:   w.onRepoSelected,
 		OnBranchSelected: w.onBranchSelected,
@@ -472,32 +403,33 @@ func (w *Window) buildContentArea() {
 		OnSubmoduleRemove: w.onSubmoduleRemove,
 		OnSubmoduleUpdate: w.onSubmoduleUpdate,
 	})
+	// Inject the sidebar header bar into the sidebar's AdwToolbarView so it
+	// lives inside the NavigationSplitView rather than above it.
+	w.sidebar.Root.AddTopBar(w.buildSidebarHeader())
 
-	// --- Content area ---
-	// The content area uses a GtkStack to switch between views:
-	// "welcome" (no repo open), "log" (commit log),
-	// "staging" (staging area).
-	w.contentStack = gtk.NewStack()
-	w.contentStack.SetTransitionType(gtk.StackTransitionTypeCrossfade)
+	// --- AdwViewStack: main content switcher ---
+	// AdwViewStack + AdwViewSwitcher is the GNOME HIG pattern for tab-style
+	// navigation.  Pages added with AddTitledWithIcon appear as tabs in the
+	// switcher; pages added with AddNamed (no title) are hidden from it and
+	// switched programmatically (sub-views like blame, merge, rebase).
+	w.contentStack = adw.NewViewStack()
 
-	// Welcome/empty state shown when no repository is loaded.
+	// Welcome/empty state — no title → not shown in switcher.
 	w.statusPage = adw.NewStatusPage()
 	w.statusPage.SetTitle("Welcome to GiTK")
 	w.statusPage.SetDescription("Open or clone a Git repository to get started")
 	w.statusPage.SetIconName("vcs-branch-symbolic")
 	w.contentStack.AddNamed(w.statusPage, "welcome")
 
-	// --- Commit log view (main view when a repo is open) ---
-	// The log view shows a split between the commit table and detail panel.
+	// --- Commit log view ---
+	// Build the commit log table widget (search bar + GtkColumnView).
 	w.commitLog = commitlog.New(func(commit git.CommitInfo) {
-		// When a commit is selected, show its details.
 		w.commitDetail.SetCommit(commit)
-		// Show refs (branches/tags) for this commit.
 		refs := w.commitLog.RefsForCommit(commit.Hash)
 		w.commitDetail.SetRefs(refs)
 	})
 
-	// --- Commit detail panel ---
+	// Build the commit detail panel (right side of the log pane).
 	w.commitDetail = commitdetail.New(w.cfg)
 	w.commitDetail.SetFileCallbacks(
 		func(path, hash string) {
@@ -510,28 +442,30 @@ func (w *Window) buildContentArea() {
 		},
 	)
 
-	// Combine commit log + detail into a horizontal split.
-	// AdwNavigationSplitView (above) propagates the exact content-pane width
-	// to this paned widget, so resize works correctly without any special flags.
-	// Table (start) grows with the window; detail panel (end) stays fixed.
-	logDetailSplit := gtk.NewPaned(gtk.OrientationHorizontal)
-	logDetailSplit.SetStartChild(w.commitLog.Root)
-	logDetailSplit.SetEndChild(w.commitDetail.Root)
-	logDetailSplit.SetPosition(700)
-	logDetailSplit.SetResizeStartChild(true)
-	logDetailSplit.SetResizeEndChild(false)
+	// The log page follows the same GtkPaned pattern as the staging area:
+	//   AdwToolbarView
+	//     └─ GtkPaned (horizontal)
+	//          ├─ [start] commit table (more space — position 700)
+	//          └─ [end]   commit detail (less space, stays fixed)
+	logPane := gtk.NewPaned(gtk.OrientationHorizontal)
+	logPane.SetStartChild(w.commitLog.Root)
+	logPane.SetEndChild(w.commitDetail.Root)
+	logPane.SetPosition(700)
+	logPane.SetResizeStartChild(true)
+	logPane.SetResizeEndChild(false)
 
-	w.contentStack.AddNamed(logDetailSplit, "log")
+	logToolbarView := adw.NewToolbarView()
+	logToolbarView.SetContent(logPane)
+
+	w.contentStack.AddTitledWithIcon(logToolbarView, "log", "Commit Log", "view-list-symbolic")
 
 	// --- Staging view ---
 	w.stagingView = staging.New(w.cfg, func(hash string) {
-		// After a commit, refresh the log.
 		if w.repo != nil {
 			w.commitLog.SetRepository(w.repo)
 		}
 		w.ShowToast("Committed " + hash[:7])
 	}, func() {
-		// Stash button in staging opens the stash dialog.
 		if w.repo != nil {
 			dialogs.ShowStashDialog(w.window, w.repo, func(msg string) {
 				w.ShowToast(msg)
@@ -540,16 +474,35 @@ func (w *Window) buildContentArea() {
 			})
 		}
 	}, func() {
-		// Changes updated — refresh the badge counter.
 		w.updateStagingBadge()
 	})
-	w.contentStack.AddNamed(w.stagingView.Root, "staging")
+	w.stagingPage = w.contentStack.AddTitledWithIcon(
+		w.stagingView.Root, "staging", "Staging", "document-edit-symbolic",
+	)
 
 	// --- Stash management page ---
 	w.stashView = stash.New()
-	w.contentStack.AddNamed(w.stashView.Root, "stash")
+	w.stashPage = w.contentStack.AddTitledWithIcon(
+		w.stashView.Root, "stash", "Stash", "sidebar-show-symbolic",
+	)
 
-	// --- Merge view ---
+	// Hook: when the user switches to staging or stash tabs via the switcher,
+	// trigger the lazy-load that was previously in the toggle button handlers.
+	w.contentStack.NotifyProperty("visible-child-name", func() {
+		name := w.contentStack.VisibleChildName()
+		if w.repo == nil {
+			return
+		}
+		switch name {
+		case "staging":
+			w.stagingView.SetRepository(w.repo)
+		case "stash":
+			w.stashView.RefreshStashes()
+		}
+	})
+
+	// --- Sub-views (not shown in AdwViewSwitcher) ---
+	// Merge view.
 	w.mergeView = merge.New(
 		func(path string, content string) {
 			slog.Info("merge resolved", "path", path)
@@ -564,20 +517,18 @@ func (w *Window) buildContentArea() {
 	)
 	w.contentStack.AddNamed(w.mergeView.Root, "merge")
 
-	// --- Blame view ---
+	// Blame view.
 	w.blameView = blame.New(func() {
 		w.contentStack.SetVisibleChildName("log")
 	})
 	w.contentStack.AddNamed(w.blameView.Root, "blame")
 
-	// --- File history view ---
+	// File history view.
 	w.fileHistoryView = filehistory.New(
 		func() {
 			w.contentStack.SetVisibleChildName("log")
 		},
 		func(commit git.CommitInfo) {
-			// Show the selected commit in the detail panel, highlight it in
-			// the main commits table, and switch back to the log view.
 			w.commitDetail.SetCommit(commit)
 			refs := w.commitLog.RefsForCommit(commit.Hash)
 			w.commitDetail.SetRefs(refs)
@@ -604,19 +555,18 @@ func (w *Window) buildContentArea() {
 	// Set the welcome page as the visible child.
 	w.contentStack.SetVisibleChildName("welcome")
 
-	// --- Content pane: secondary header + content stack ---
-	// The secondary header carries view-switcher + remote-ops buttons.
-	// Wrapping in AdwToolbarView gives proper header-bar styling and ensures
-	// the content stack fills the remaining height.
-	contentHeader := w.buildContentHeader()
+	// --- Content pane: view-switcher header + view stack ---
+	// AdwViewSwitcher is passed the view stack and placed as the title widget
+	// of the content header bar. Wrapping in AdwToolbarView gives proper
+	// header-bar styling and ensures the stack fills the remaining height.
+	contentHeader := w.buildContentHeader(w.contentStack)
 	contentToolbarView := adw.NewToolbarView()
 	contentToolbarView.AddTopBar(contentHeader)
 	contentToolbarView.SetContent(w.contentStack)
 
-	// --- NavigationSplitView (GNOME HIG sidebar pattern) ---
-	// A single AdwHeaderBar (built by buildHeaderBar) spans the full window
-	// width above the split view.  The split view divides the remaining space
-	// into a collapsible sidebar and the content pane.
+	// --- AdwNavigationSplitView (GNOME HIG sidebar pattern) ---
+	// Each NavigationPage owns its own AdwToolbarView + AdwHeaderBar, so
+	// the header bars live *inside* the split view — not above it.
 	navSplit := adw.NewNavigationSplitView()
 	navSplit.SetMinSidebarWidth(200)
 	navSplit.SetMaxSidebarWidth(320)
@@ -628,7 +578,7 @@ func (w *Window) buildContentArea() {
 	contentPage := adw.NewNavigationPage(contentToolbarView, "GiTK")
 	navSplit.SetContent(contentPage)
 
-	// --- Toast overlay ---
+	// --- Toast overlay (direct window content — no outer AdwToolbarView) ---
 	w.toastOverlay = adw.NewToastOverlay()
 	w.toastOverlay.SetChild(navSplit)
 }
@@ -651,10 +601,10 @@ func (w *Window) onRepoSelected(repo *git.Repository) {
 	w.rebaseView.SetRepository(repo)
 	w.window.SetTitle(repo.Name())
 
-	// Enable view switcher buttons now that a repo is open.
-	w.logBtn.SetSensitive(true)
-	w.stagingBtn.SetSensitive(true)
-	w.stashBtn.SetSensitive(true)
+	// Enable remote-operation buttons now that a repo is open.
+	w.fetchBtn.SetSensitive(true)
+	w.pullBtn.SetSensitive(true)
+	w.pushBtn.SetSensitive(true)
 
 	w.switchToView("log")
 	w.ShowToast("Opened " + repo.Name())
@@ -690,11 +640,11 @@ func (w *Window) badgePollLoop(stopCh chan struct{}) {
 	}
 }
 
-// updateStagingBadge checks for uncommitted changes and updates
-// the external chip label to show the change count.
+// updateStagingBadge checks for uncommitted changes and updates the badge
+// number on the Staging tab in the AdwViewSwitcher.
 func (w *Window) updateStagingBadge() {
 	if w.repo == nil {
-		w.stagingChip.SetVisible(false)
+		w.stagingPage.SetBadgeNumber(0)
 		return
 	}
 
@@ -702,10 +652,9 @@ func (w *Window) updateStagingBadge() {
 		changes, err := w.repo.Status()
 		glib.IdleAdd(func() {
 			if err != nil || len(changes) == 0 {
-				w.stagingChip.SetVisible(false)
+				w.stagingPage.SetBadgeNumber(0)
 			} else {
-				w.stagingChip.SetText(fmt.Sprintf("%d changes", len(changes)))
-				w.stagingChip.SetVisible(true)
+				w.stagingPage.SetBadgeNumber(uint(len(changes)))
 			}
 		})
 	}()
@@ -1136,20 +1085,20 @@ func (w *Window) registerWindowActions() {
 
 }
 
-// updateStashChip refreshes the stash count chip in the toolbar.
+// updateStashChip refreshes the badge number on the Stash tab in the
+// AdwViewSwitcher to reflect the current stash count.
 func (w *Window) updateStashChip() {
 	if w.repo == nil {
-		w.stashChip.SetVisible(false)
+		w.stashPage.SetBadgeNumber(0)
 		return
 	}
 	go func() {
 		stashes, err := w.repo.StashList()
 		glib.IdleAdd(func() {
 			if err != nil || len(stashes) == 0 {
-				w.stashChip.SetVisible(false)
+				w.stashPage.SetBadgeNumber(0)
 			} else {
-				w.stashChip.SetText(fmt.Sprintf("%d stashed", len(stashes)))
-				w.stashChip.SetVisible(true)
+				w.stashPage.SetBadgeNumber(uint(len(stashes)))
 			}
 		})
 	}()

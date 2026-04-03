@@ -37,8 +37,10 @@ type OnCommitSelected func(commit git.CommitInfo)
 
 // CommitLog is the commit history table widget.
 type CommitLog struct {
-	// Root is the top-level widget (AdwToolbarView with header + table).
-	Root *adw.ToolbarView
+	// Root is the top-level widget (search bar + scrolled table).
+	// It is designed to be placed as the start child of a GtkPaned
+	// in the parent layout (window.go), alongside the commit detail panel.
+	Root *gtk.Box
 
 	// repo is the currently loaded repository.
 	repo *git.Repository
@@ -175,14 +177,12 @@ func (cl *CommitLog) build() {
 	tableArea.SetVExpand(true)
 	tableArea.SetHExpand(true)
 
-	// Main content box.
-	contentBox := gtk.NewBox(gtk.OrientationVertical, 0)
-	contentBox.Append(searchBox)
-	contentBox.Append(tableArea)
-
-	// Assemble into toolbar view.
-	cl.Root = adw.NewToolbarView()
-	cl.Root.SetContent(contentBox)
+	// Root is the vertical box (search bar on top, table below).
+	// The parent layout (window.go) places this as the start child
+	// of a GtkPaned alongside the commit detail panel.
+	cl.Root = gtk.NewBox(gtk.OrientationVertical, 0)
+	cl.Root.Append(searchBox)
+	cl.Root.Append(tableArea)
 	cl.Root.SetHExpand(true)
 }
 
