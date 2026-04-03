@@ -1,0 +1,44 @@
+{
+    "app-id": "io.github.MedaiP90.GiTK",
+    "runtime": "org.gnome.Platform",
+    "runtime-version": "46",
+    "sdk": "org.gnome.Sdk",
+    "sdk-extensions": [
+        "org.freedesktop.Sdk.Extension.golang"
+    ],
+    "command": "gitk",
+    "finish-args": [
+        "--share=ipc",
+        "--socket=fallback-x11",
+        "--socket=wayland",
+        "--share=network",
+        "--filesystem=home",
+        "--filesystem=host:ro",
+        "--talk-name=org.freedesktop.secrets"
+    ],
+    "build-options": {
+        "append-path": "/usr/lib/sdk/golang/bin",
+        "env": {
+            "GOPATH": "/run/build/gitk/go",
+            "GOFLAGS": "-mod=vendor"
+        }
+    },
+    "modules": [
+        {
+            "name": "gitk",
+            "buildsystem": "simple",
+            "build-commands": [
+                "go build -o /app/bin/gitk .",
+                "install -Dm644 data/io.github.MedaiP90.GiTK.desktop /app/share/applications/io.github.MedaiP90.GiTK.desktop",
+                "install -Dm644 data/io.github.MedaiP90.GiTK.metainfo.xml /app/share/metainfo/io.github.MedaiP90.GiTK.metainfo.xml",
+                "install -Dm644 data/io.github.MedaiP90.GiTK.svg /app/share/icons/hicolor/scalable/apps/io.github.MedaiP90.GiTK.svg"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "."
+                }
+            ]
+        }
+    ]
+}
