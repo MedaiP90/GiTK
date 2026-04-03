@@ -523,6 +523,7 @@ func (cl *CommitLog) addRefsColumn() {
 	})
 
 	col := gtk.NewColumnViewColumn("Refs", &factory.ListItemFactory)
+	col.SetFixedWidth(120)
 	col.SetResizable(true)
 	cl.columnView.AppendColumn(col)
 }
