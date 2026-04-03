@@ -380,26 +380,11 @@ func (s *Sidebar) RefreshBranches() {
 	localExpander.SetTitle("Local")
 	localExpander.SetIconName("vcs-branch-symbolic")
 	localExpander.SetExpanded(true)
-	localExpander.SetMarginBottom(12) // expanded by default
-	localExpander.Connect("notify::expanded", func() {
-		if localExpander.Expanded() {
-			localExpander.SetMarginBottom(12)
-		} else {
-			localExpander.SetMarginBottom(0)
-		}
-	})
 
 	remoteExpander := adw.NewExpanderRow()
 	remoteExpander.SetTitle("Remote")
 	remoteExpander.SetIconName("network-server-symbolic")
 	remoteExpander.SetExpanded(false)
-	remoteExpander.Connect("notify::expanded", func() {
-		if remoteExpander.Expanded() {
-			remoteExpander.SetMarginBottom(12)
-		} else {
-			remoteExpander.SetMarginBottom(0)
-		}
-	})
 
 	// "Add Remote" button on the Remote branches expander header.
 	addRemoteBtn := gtk.NewButtonFromIconName("list-add-symbolic")
@@ -503,13 +488,6 @@ func (s *Sidebar) RefreshBranches() {
 	tagsExpander.SetTitle("Tags")
 	tagsExpander.SetIconName("tag-symbolic")
 	tagsExpander.SetExpanded(false)
-	tagsExpander.Connect("notify::expanded", func() {
-		if tagsExpander.Expanded() {
-			tagsExpander.SetMarginBottom(12)
-		} else {
-			tagsExpander.SetMarginBottom(0)
-		}
-	})
 
 	for i, tag := range tags {
 		tagName := tag.Name
@@ -542,13 +520,6 @@ func (s *Sidebar) RefreshBranches() {
 	submodulesExpander.SetIconName("package-x-generic-symbolic")
 	submodulesExpander.SetExpanded(false)
 	submodulesExpander.SetSubtitle(formatCount(len(submodules)))
-	submodulesExpander.Connect("notify::expanded", func() {
-		if submodulesExpander.Expanded() {
-			submodulesExpander.SetMarginBottom(12)
-		} else {
-			submodulesExpander.SetMarginBottom(0)
-		}
-	})
 
 	// "Update All" button.
 	updateSubmodulesBtn := gtk.NewButtonFromIconName("view-refresh-symbolic")
@@ -574,7 +545,7 @@ func (s *Sidebar) RefreshBranches() {
 	})
 	submodulesExpander.AddSuffix(addSubmoduleBtn)
 
-	for i, sm := range submodules {
+	for _, sm := range submodules {
 		smPath := sm.Path
 		smRow := adw.NewActionRow()
 		smRow.SetTitle(sm.Name)
@@ -597,11 +568,6 @@ func (s *Sidebar) RefreshBranches() {
 			}
 		})
 		smRow.AddSuffix(removeBtn)
-
-		// Add some spacing at the end of the list.
-		if i == len(submodules) - 1 {
-			smRow.SetMarginBottom(12)
-		}
 
 		submodulesExpander.AddRow(smRow)
 	}
