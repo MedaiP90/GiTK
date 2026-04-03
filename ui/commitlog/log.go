@@ -133,11 +133,11 @@ func (cl *CommitLog) build() {
 
 	// Graph is the first column in the ColumnView so it scrolls with the table.
 	cl.addGraphColumn()
-	cl.addHashColumn()
+	cl.addRefsColumn()
 	cl.addSubjectColumn()
 	cl.addAuthorColumn()
+	cl.addHashColumn()
 	cl.addDateColumn()
-	cl.addRefsColumn()
 
 	// Handle row activation (double-click/enter).
 	cl.columnView.ConnectActivate(func(pos uint) {
@@ -381,7 +381,7 @@ func (cl *CommitLog) addHashColumn() {
 
 	col := gtk.NewColumnViewColumn("Hash", &factory.ListItemFactory)
 	col.SetFixedWidth(80)
-	col.SetResizable(true)
+	col.SetResizable(false)
 	cl.columnView.AppendColumn(col)
 }
 
@@ -423,6 +423,7 @@ func (cl *CommitLog) addAuthorColumn() {
 		label := gtk.NewLabel("")
 		label.SetXAlign(0)
 		label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
+		label.SetHExpand(true)
 		item.SetChild(label)
 	})
 
@@ -436,8 +437,7 @@ func (cl *CommitLog) addAuthorColumn() {
 	})
 
 	col := gtk.NewColumnViewColumn("Author", &factory.ListItemFactory)
-	col.SetFixedWidth(150)
-	col.SetResizable(true)
+	col.SetResizable(false)
 	cl.columnView.AppendColumn(col)
 }
 
@@ -464,7 +464,7 @@ func (cl *CommitLog) addDateColumn() {
 
 	col := gtk.NewColumnViewColumn("Date", &factory.ListItemFactory)
 	col.SetFixedWidth(120)
-	col.SetResizable(true)
+	col.SetResizable(false)
 	cl.columnView.AppendColumn(col)
 }
 
