@@ -21,7 +21,9 @@ GO        := go
 GOFLAGS   :=
 LDFLAGS   := -s -w -X main.version=$(VERSION)
 BUILD_DIR := build
-BINARY    := $(BUILD_DIR)/$(APP_NAME)
+GOOS      ?= $(shell $(GO) env GOOS)
+GOARCH    ?= $(shell $(GO) env GOARCH)
+BINARY    := $(BUILD_DIR)/$(APP_NAME)-$(VERSION)-$(GOOS)-$(GOARCH)
 
 # Installation directories (freedesktop.org standard)
 PREFIX       := $(HOME)/.local
