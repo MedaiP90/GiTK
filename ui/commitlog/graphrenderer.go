@@ -76,9 +76,21 @@ func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 	h := float64(height)
 	centerY := h / 2.0
 
-	// --- Pass 1: Draw ALL active lane lines as full-height verticals ---
-	// This ensures continuous lines between rows with no gaps.
+	// Build a set of lanes that have incoming edges at this row.
+	// These lanes are being merged into the commit's lane via a Bezier
+	// curve, so we must NOT draw a straight pass-through line for them.
+	incomingLanes := make(map[int]bool, len(c.IncomingEdges))
+	for _, edge := range c.IncomingEdges {
+		incomingLanes[edge.FromLane] = true
+	}
+
+	// --- Pass 1: Draw active lane pass-through lines ---
+	// Skip the commit's own lane (handled in Pass 2) and lanes that
+	// have an incoming edge (handled by the Bezier curve in Pass 4).
 	for _, lane := range c.ActiveLanes {
+		if lane == c.Lane || incomingLanes[lane] {
+			continue
+		}
 		x := float64(lane)*laneWidth + laneWidth/2.0
 		color := laneColor(lane)
 		cr.SetSourceRGB(color[0], color[1], color[2])
@@ -90,20 +102,28 @@ func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 	}
 
 	// --- Pass 2: Draw the commit's own lane vertical line ---
-	// Even though the node sits here, we draw a full-height line so the
-	// graph connects seamlessly to the rows above and below. The node
-	// circle will be drawn on top of this line.
 	hasParents := len(c.Edges) > 0
 	nodeX := float64(c.Lane)*laneWidth + laneWidth/2.0
 	ownColor := laneColor(c.Lane)
 
+	cr.SetSourceRGB(ownColor[0], ownColor[1], ownColor[2])
+	cr.SetLineWidth(1.5)
+	cr.SetDash(nil, 0)
+
 	if !hasParents {
-		// Draw a vertical line from the node to the top of the row.
-		cr.SetSourceRGB(ownColor[0], ownColor[1], ownColor[2])
-		cr.SetLineWidth(1.5)
-		cr.SetDash(nil, 0)
+		// Root commit: line from the node to the top of the row.
 		cr.MoveTo(nodeX, centerY)
 		cr.LineTo(nodeX, 0)
+		cr.Stroke()
+	} else if c.IsLaneTip {
+		// Tip of a branch: line from center down to bottom only.
+		cr.MoveTo(nodeX, centerY)
+		cr.LineTo(nodeX, h)
+		cr.Stroke()
+	} else {
+		// Normal commit: full-height line connects to rows above and below.
+		cr.MoveTo(nodeX, 0)
+		cr.LineTo(nodeX, h)
 		cr.Stroke()
 	}
 

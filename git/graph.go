@@ -84,6 +84,12 @@ type GraphCommit struct {
 	// The renderer draws these as curves from the top of the row to
 	// the commit's node center.
 	IncomingEdges []GraphEdge
+
+	// IsLaneTip is true when this commit is the tip (topmost) of its lane,
+	// meaning no child was waiting for it — it's the start of a branch.
+	// The renderer draws center→bottom instead of full-height for the
+	// commit's own lane.
+	IsLaneTip bool
 }
 
 // GraphEdge describes a line to draw from this commit's lane to a
@@ -301,6 +307,10 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 			}
 		}
 
+		// isLaneTip means no child was waiting for this commit — it's the
+		// topmost commit on its lane (branch tip).
+		isLaneTip := lane == -1
+
 		if lane == -1 {
 			// No lane is waiting for this commit. Find a free lane or create a new one.
 			lane = findFreeLane(activeLanes)
@@ -415,6 +425,7 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 			IsHead:        ci.Hash == headHash,
 			ParentHashes:  ci.ParentHashes,
 			ActiveLanes:   active,
+			IsLaneTip:     isLaneTip,
 		}
 
 		result = append(result, gc)
