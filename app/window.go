@@ -181,6 +181,15 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 	color: @accent_fg_color;
 	font-weight: bold;
 	font-size: 0.8em;
+}
+/* Remove all vertical padding from ColumnView cells so graph lines connect. */
+columnview > listview > row > cell {
+	padding-top: 0;
+	padding-bottom: 0;
+}
+columnview > listview > row {
+	padding: 0;
+	min-height: 0;
 }`)
 	gtk.StyleContextAddProviderForDisplay(
 		gdk.DisplayGetDefault(),
@@ -572,8 +581,9 @@ func (w *Window) buildContentArea() {
 	})
 
 	// --- Sub-views (not shown in AdwViewSwitcher) ---
-	// Merge view.
+	// Merge view (opens in its own window).
 	w.mergeView = merge.New(
+		w.window,
 		func(path string, content string) {
 			go func() {
 				err := w.repo.MarkResolved(path, content)
@@ -589,6 +599,7 @@ func (w *Window) buildContentArea() {
 					if len(remaining) > 0 {
 						w.openMergeForConflicts()
 					} else {
+						w.mergeView.Close()
 						w.onAllConflictsResolved()
 					}
 				})
@@ -610,14 +621,14 @@ func (w *Window) buildContentArea() {
 					} else {
 						w.ShowToast("Operation aborted")
 					}
+					w.mergeView.Close()
 					w.commitLog.Refresh()
 					w.sidebar.RefreshBranches()
-					w.switchToView("log")
+					w.stagingView.Refresh()
 				})
 			}()
 		},
 	)
-	w.contentStack.AddNamed(w.mergeView.Root, "merge")
 
 	// Blame view.
 	w.blameView = blame.New(func() {
@@ -1092,7 +1103,7 @@ func (w *Window) openMergeForConflicts() {
 		glib.IdleAdd(func() {
 			w.mergeView.SetConflictFiles(files)
 			w.mergeView.SetMergeResult(&result)
-			w.switchToView("merge")
+			w.mergeView.Present()
 		})
 	}()
 }

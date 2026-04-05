@@ -107,14 +107,21 @@ func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 		cr.Stroke()
 	}
 
-	// --- Pass 3: Draw cross-lane edges (curves to other lanes) ---
+	// --- Pass 3: Draw outgoing cross-lane edges (curves to parent lanes) ---
 	for _, edge := range c.Edges {
 		if edge.FromLane != edge.ToLane {
-			drawEdge(cr, edge, centerY, height)
+			drawOutgoingEdge(cr, edge, centerY, height)
 		}
 	}
 
-	// --- Pass 4: Draw the commit node on top ---
+	// --- Pass 4: Draw incoming edges from converging children ---
+	// These are branches that diverge upward: curves from the child's lane
+	// at the top of the row to the commit's node center.
+	for _, edge := range c.IncomingEdges {
+		drawIncomingEdge(cr, edge, centerY, height)
+	}
+
+	// --- Pass 5: Draw the commit node on top ---
 	if c.IsMerge {
 		drawDiamond(cr, nodeX, centerY, nodeRadius+1, ownColor)
 	} else {
@@ -130,11 +137,9 @@ func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 	}
 }
 
-// drawEdge draws a curved connection line from this commit's lane to a
-// parent's lane when they differ. The curve runs from the commit node
-// (centerY) down to the bottom of the row, where the next row's vertical
-// line for the parent lane will continue.
-func drawEdge(cr *cairo.Context, edge git.GraphEdge, centerY float64, height int) {
+// drawOutgoingEdge draws a curved connection line from this commit's node
+// (centerY) down to a parent's lane at the bottom of the row.
+func drawOutgoingEdge(cr *cairo.Context, edge git.GraphEdge, centerY float64, height int) {
 	fromX := float64(edge.FromLane)*laneWidth + laneWidth/2.0
 	toX := float64(edge.ToLane)*laneWidth + laneWidth/2.0
 	h := float64(height)
@@ -155,6 +160,32 @@ func drawEdge(cr *cairo.Context, edge git.GraphEdge, centerY float64, height int
 	cp1y := centerY + h/4.0
 	cp2y := h - h/4.0
 	cr.CurveTo(fromX, cp1y, toX, cp2y, toX, h)
+	cr.Stroke()
+}
+
+// drawIncomingEdge draws a curved connection line from a child's lane at
+// the top of the row to this commit's node (centerY). This shows branch
+// divergence: where a child in a different lane connects to this parent.
+func drawIncomingEdge(cr *cairo.Context, edge git.GraphEdge, centerY float64, height int) {
+	fromX := float64(edge.FromLane)*laneWidth + laneWidth/2.0
+	toX := float64(edge.ToLane)*laneWidth + laneWidth/2.0
+	color := laneColor(edge.FromLane)
+
+	cr.SetSourceRGB(color[0], color[1], color[2])
+
+	if edge.Style == git.EdgeDashed {
+		cr.SetDash([]float64{4, 4}, 0)
+	} else {
+		cr.SetDash(nil, 0)
+	}
+
+	cr.SetLineWidth(1.5)
+
+	// Bezier curve from the top of the row to the node center.
+	cp1y := centerY / 4.0
+	cp2y := centerY - centerY/4.0
+	cr.MoveTo(fromX, 0)
+	cr.CurveTo(fromX, cp1y, toX, cp2y, toX, centerY)
 	cr.Stroke()
 }
 
