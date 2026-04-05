@@ -187,6 +187,10 @@ columnview > listview > row > cell {
 	padding-top: 0;
 	padding-bottom: 0;
 }
+.text-cell {
+	padding-top: 10px;
+	padding-bottom: 10px;
+}
 columnview > listview > row {
 	padding: 0;
 	min-height: 0;

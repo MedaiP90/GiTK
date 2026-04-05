@@ -367,6 +367,7 @@ func (cl *CommitLog) addHashColumn() {
 		label.SetXAlign(0)
 		label.AddCSSClass("monospace")
 		label.AddCSSClass("dim-label")
+		label.AddCSSClass("text-cell")
 		item.SetChild(label)
 	})
 
@@ -395,6 +396,7 @@ func (cl *CommitLog) addSubjectColumn() {
 		label.SetXAlign(0)
 		label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
 		label.SetHExpand(true)
+		label.AddCSSClass("text-cell")
 		item.SetChild(label)
 	})
 
@@ -424,6 +426,7 @@ func (cl *CommitLog) addAuthorColumn() {
 		label.SetXAlign(0)
 		label.SetEllipsize(3) // PANGO_ELLIPSIZE_END
 		label.SetHExpand(true)
+		label.AddCSSClass("text-cell")
 		item.SetChild(label)
 	})
 
@@ -450,6 +453,7 @@ func (cl *CommitLog) addDateColumn() {
 		label := gtk.NewLabel("")
 		label.SetXAlign(0)
 		label.AddCSSClass("dim-label")
+		label.AddCSSClass("text-cell")
 		item.SetChild(label)
 	})
 
@@ -478,6 +482,7 @@ func (cl *CommitLog) addRefsColumn() {
 		item := toCell(obj)
 		box := gtk.NewBox(gtk.OrientationVertical, 1)
 		box.SetVAlign(gtk.AlignCenter)
+		box.AddCSSClass("text-cell")
 		item.SetChild(box)
 	})
 
