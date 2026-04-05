@@ -73,55 +73,71 @@ func ClearGraphCommit(da *gtk.DrawingArea) {
 
 // drawGraph renders the lane lines, edges, and commit node for one row.
 func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
-	centerY := float64(height) / 2.0
+	h := float64(height)
+	centerY := h / 2.0
 
-	// --- Draw pass-through lane lines ---
-	// These are vertical lines for lanes that have a branch/commit
-	// passing through this row without a node here.
+	// --- Pass 1: Draw ALL active lane lines as full-height verticals ---
+	// This ensures continuous lines between rows with no gaps.
 	for _, lane := range c.ActiveLanes {
-		if lane == c.Lane {
-			continue // The commit's own lane is drawn by edges/node.
-		}
 		x := float64(lane)*laneWidth + laneWidth/2.0
 		color := laneColor(lane)
 		cr.SetSourceRGB(color[0], color[1], color[2])
 		cr.SetLineWidth(1.5)
 		cr.SetDash(nil, 0)
 		cr.MoveTo(x, 0)
-		cr.LineTo(x, float64(height))
+		cr.LineTo(x, h)
 		cr.Stroke()
 	}
 
-	// --- Draw edges (lines from this commit to its parents) ---
-	for _, edge := range c.Edges {
-		drawEdge(cr, edge, centerY, height)
+	// --- Pass 2: Draw the commit's own lane vertical line ---
+	// Even though the node sits here, we draw a full-height line so the
+	// graph connects seamlessly to the rows above and below. The node
+	// circle will be drawn on top of this line.
+	hasParents := len(c.Edges) > 0
+	nodeX := float64(c.Lane)*laneWidth + laneWidth/2.0
+	ownColor := laneColor(c.Lane)
+
+	if hasParents {
+		// Draw a full vertical line in the commit's lane.
+		cr.SetSourceRGB(ownColor[0], ownColor[1], ownColor[2])
+		cr.SetLineWidth(1.5)
+		cr.SetDash(nil, 0)
+		cr.MoveTo(nodeX, 0)
+		cr.LineTo(nodeX, h)
+		cr.Stroke()
 	}
 
-	// --- Draw the commit node ---
-	nodeX := float64(c.Lane)*laneWidth + laneWidth/2.0
-	color := laneColor(c.Lane)
+	// --- Pass 3: Draw cross-lane edges (curves to other lanes) ---
+	for _, edge := range c.Edges {
+		if edge.FromLane != edge.ToLane {
+			drawEdge(cr, edge, centerY, height)
+		}
+	}
 
+	// --- Pass 4: Draw the commit node on top ---
 	if c.IsMerge {
-		// Merge commits are drawn as diamonds.
-		drawDiamond(cr, nodeX, centerY, nodeRadius+1, color)
+		drawDiamond(cr, nodeX, centerY, nodeRadius+1, ownColor)
 	} else {
-		// Regular commits are circles.
-		drawCircle(cr, nodeX, centerY, nodeRadius, color)
+		drawCircle(cr, nodeX, centerY, nodeRadius, ownColor)
 	}
 
 	// HEAD commit gets a double-ring.
 	if c.IsHead {
-		cr.SetSourceRGB(color[0], color[1], color[2])
+		cr.SetSourceRGB(ownColor[0], ownColor[1], ownColor[2])
 		cr.SetLineWidth(1.5)
 		cr.Arc(nodeX, centerY, nodeRadius+3, 0, 2*math.Pi)
 		cr.Stroke()
 	}
 }
 
-// drawEdge draws a connection line from this commit to a parent.
+// drawEdge draws a curved connection line from this commit's lane to a
+// parent's lane when they differ. The curve runs from the commit node
+// (centerY) down to the bottom of the row, where the next row's vertical
+// line for the parent lane will continue.
 func drawEdge(cr *cairo.Context, edge git.GraphEdge, centerY float64, height int) {
 	fromX := float64(edge.FromLane)*laneWidth + laneWidth/2.0
 	toX := float64(edge.ToLane)*laneWidth + laneWidth/2.0
+	h := float64(height)
 	color := laneColor(edge.ToLane)
 
 	cr.SetSourceRGB(color[0], color[1], color[2])
@@ -134,20 +150,11 @@ func drawEdge(cr *cairo.Context, edge git.GraphEdge, centerY float64, height int
 
 	cr.SetLineWidth(1.5)
 
-	if edge.FromLane == edge.ToLane {
-		// Straight vertical line — the edge stays in the same lane.
-		cr.MoveTo(fromX, 0)
-		cr.LineTo(fromX, float64(height))
-	} else {
-		// Curved line — the edge crosses lanes.
-		// Use a bezier curve for smooth visual appearance.
-		cr.MoveTo(fromX, centerY)
-		// Control points create a smooth S-curve.
-		cp1y := centerY + float64(height)/4.0
-		cp2y := float64(height) - float64(height)/4.0
-		cr.CurveTo(fromX, cp1y, toX, cp2y, toX, float64(height))
-	}
-
+	// Bezier curve from the node center down to the bottom of the row.
+	cr.MoveTo(fromX, centerY)
+	cp1y := centerY + h/4.0
+	cp2y := h - h/4.0
+	cr.CurveTo(fromX, cp1y, toX, cp2y, toX, h)
 	cr.Stroke()
 }
 

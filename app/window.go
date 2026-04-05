@@ -539,6 +539,12 @@ func (w *Window) buildContentArea() {
 	}, func() {
 		// Resolve Conflicts button clicked in staging banner.
 		w.openMergeForConflicts()
+	}, func() {
+		// Abort button clicked in staging banner.
+		w.abortCurrentOperation()
+	}, func() {
+		// Skip button clicked in staging banner (rebase only).
+		w.skipRebaseConflict()
 	}, w.ShowToast)
 	w.stagingPage = w.contentStack.AddTitledWithIcon(
 		w.stagingView.Root, "staging", "Staging", "document-edit-symbolic",
@@ -1087,6 +1093,68 @@ func (w *Window) openMergeForConflicts() {
 			w.mergeView.SetConflictFiles(files)
 			w.mergeView.SetMergeResult(&result)
 			w.switchToView("merge")
+		})
+	}()
+}
+
+// abortCurrentOperation aborts the current merge or rebase.
+// Can be called from the staging banner or merge view.
+func (w *Window) abortCurrentOperation() {
+	go func() {
+		state := w.repo.State()
+		var err error
+		if state == git.StateRebasing {
+			err = w.repo.AbortRebase()
+		} else {
+			err = w.repo.AbortMerge()
+		}
+		glib.IdleAdd(func() {
+			if err != nil {
+				w.ShowToast("Abort failed: " + err.Error())
+			} else {
+				w.ShowToast("Operation aborted")
+			}
+			w.commitLog.Refresh()
+			w.sidebar.RefreshBranches()
+			w.stagingView.SetRepository(w.repo)
+			w.switchToView("log")
+		})
+	}()
+}
+
+// skipRebaseConflict skips the current conflicting commit during a rebase.
+func (w *Window) skipRebaseConflict() {
+	go func() {
+		err := w.repo.SkipRebase()
+		glib.IdleAdd(func() {
+			if err != nil {
+				msg := err.Error()
+				// Skip may cause another conflict.
+				if w.repo.State() == git.StateRebasing {
+					files, _ := w.repo.ConflictedFiles()
+					if len(files) > 0 {
+						w.ShowToast("Rebase paused again on next commit")
+						w.stagingView.SetRepository(w.repo)
+						w.stagingView.Refresh()
+						return
+					}
+				}
+				w.ShowToast("Skip failed: " + msg)
+			} else {
+				w.ShowToast("Commit skipped")
+			}
+			w.commitLog.Refresh()
+			w.sidebar.RefreshBranches()
+			// Check if rebase is still in progress (more commits to apply).
+			if w.repo.State() == git.StateRebasing {
+				files, _ := w.repo.ConflictedFiles()
+				if len(files) > 0 {
+					w.stagingView.SetRepository(w.repo)
+					w.stagingView.Refresh()
+					return
+				}
+			}
+			w.switchToView("log")
 		})
 	}()
 }

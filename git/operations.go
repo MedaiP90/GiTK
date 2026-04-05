@@ -55,6 +55,9 @@ const (
 
 	// StatusUntracked means the file is not tracked by Git.
 	StatusUntracked FileStatusCode = '?'
+
+	// StatusUnmerged means the file has a merge conflict.
+	StatusUnmerged FileStatusCode = 'U'
 )
 
 // FileChange represents a single file's status in the working tree.
@@ -826,20 +829,33 @@ func (r *Repository) MergeBranch(branchName string) error {
 	return nil
 }
 
-// ConflictedFiles returns the list of files with merge conflicts.
-// It runs `git diff --name-only --diff-filter=U` to find unmerged paths.
+// ConflictedFiles returns the list of files with merge/rebase conflicts.
+// It checks both the diff index and porcelain status to handle all conflict
+// scenarios (merge, rebase, cherry-pick).
 func (r *Repository) ConflictedFiles() ([]string, error) {
-	cmd := exec.Command("git", "diff", "--name-only", "--diff-filter=U")
+	// Use porcelain status which reliably shows "UU", "AA", "DU", "UD" etc.
+	cmd := exec.Command("git", "status", "--porcelain=v1")
 	cmd.Dir = r.path
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("list conflicted files: %w", err)
 	}
-	output := strings.TrimSpace(string(out))
-	if output == "" {
-		return nil, nil
+
+	var files []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		// Porcelain v1: XY filename
+		// Unmerged entries have specific two-char codes:
+		// UU = both modified, AA = both added, DU/UD = deleted by one side
+		x, y := line[0], line[1]
+		isUnmerged := (x == 'U' || y == 'U') || (x == 'A' && y == 'A') || (x == 'D' && y == 'D')
+		if isUnmerged {
+			files = append(files, strings.TrimSpace(line[3:]))
+		}
 	}
-	return strings.Split(output, "\n"), nil
+	return files, nil
 }
 
 // ConflictFileVersions retrieves the base, ours, and theirs content for
@@ -1811,6 +1827,19 @@ func (r *Repository) AbortRebase() error {
 		return fmt.Errorf("rebase --abort: %s", strings.TrimSpace(string(out)))
 	}
 	slog.Info("rebase aborted")
+	return nil
+}
+
+// SkipRebase skips the current conflicting commit during a rebase and
+// continues with the next one.
+func (r *Repository) SkipRebase() error {
+	cmd := exec.Command("git", "rebase", "--skip")
+	cmd.Dir = r.path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("rebase --skip: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("rebase commit skipped")
 	return nil
 }
 
