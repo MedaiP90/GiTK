@@ -81,17 +81,10 @@ func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 	for _, lane := range c.ActiveLanes {
 		x := float64(lane)*laneWidth + laneWidth/2.0
 		color := laneColor(lane)
-
-		// If this is the head commit, start the line from the center.
-		fromY := 0.0
-		if c.IsHead {
-			fromY = centerY
-		}
-
 		cr.SetSourceRGB(color[0], color[1], color[2])
 		cr.SetLineWidth(1.5)
 		cr.SetDash(nil, 0)
-		cr.MoveTo(x, fromY)
+		cr.MoveTo(x, 0)
 		cr.LineTo(x, h)
 		cr.Stroke()
 	}
