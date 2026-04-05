@@ -124,7 +124,7 @@ func (cl *CommitLog) build() {
 
 	// Create the column view.
 	cl.columnView = gtk.NewColumnView(cl.selection)
-	cl.columnView.SetShowRowSeparators(false)
+	cl.columnView.SetShowRowSeparators(true)
 	cl.columnView.SetShowColumnSeparators(false)
 	cl.columnView.SetVExpand(true)
 	cl.columnView.SetHExpand(true)
