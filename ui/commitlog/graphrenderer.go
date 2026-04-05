@@ -81,10 +81,17 @@ func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 	for _, lane := range c.ActiveLanes {
 		x := float64(lane)*laneWidth + laneWidth/2.0
 		color := laneColor(lane)
+
+		// If this is the head commit, start the line from the center.
+		fromY := 0.0
+		if c.IsHead {
+			fromY = centerY
+		}
+
 		cr.SetSourceRGB(color[0], color[1], color[2])
 		cr.SetLineWidth(1.5)
 		cr.SetDash(nil, 0)
-		cr.MoveTo(x, 0)
+		cr.MoveTo(x, fromY)
 		cr.LineTo(x, h)
 		cr.Stroke()
 	}
@@ -97,13 +104,13 @@ func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 	nodeX := float64(c.Lane)*laneWidth + laneWidth/2.0
 	ownColor := laneColor(c.Lane)
 
-	if hasParents {
-		// Draw a full vertical line in the commit's lane.
+	if !hasParents {
+		// Draw a vertical line from the node to the top of the row.
 		cr.SetSourceRGB(ownColor[0], ownColor[1], ownColor[2])
 		cr.SetLineWidth(1.5)
 		cr.SetDash(nil, 0)
-		cr.MoveTo(nodeX, 0)
-		cr.LineTo(nodeX, h)
+		cr.MoveTo(nodeX, centerY)
+		cr.LineTo(nodeX, 0)
 		cr.Stroke()
 	}
 
