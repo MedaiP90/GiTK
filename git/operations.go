@@ -1813,3 +1813,17 @@ func (r *Repository) AbortRebase() error {
 	slog.Info("rebase aborted")
 	return nil
 }
+
+// ContinueRebase continues an in-progress rebase after conflicts have been
+// resolved and staged.
+func (r *Repository) ContinueRebase() error {
+	cmd := exec.Command("git", "rebase", "--continue")
+	cmd.Dir = r.path
+	cmd.Env = append(os.Environ(), "GIT_EDITOR=true")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("rebase --continue: %s", strings.TrimSpace(string(out)))
+	}
+	slog.Info("rebase continued")
+	return nil
+}

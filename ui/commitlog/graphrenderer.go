@@ -10,15 +10,13 @@
 // vector graphics. Colors come from the GNOME palette to ensure they
 // look good in both light and dark themes.
 //
-// Design note: We cannot embed *gtk.DrawingArea in a custom Go struct and
-// recover it from ColumnViewCell.Child(), because gotk4 wraps the C pointer
-// as *gtk.DrawingArea — our Go struct is lost. Instead, we store the commit
-// data in a package-level sync.Map keyed by the DrawingArea's native pointer.
+// Data is passed to each DrawingArea by resetting its draw function closure
+// on every bind. This avoids the fragile sync.Map + native-pointer key
+// approach and works reliably with GTK4's list-item recycling.
 package commitlog
 
 import (
-	"sync"
-	"unsafe"
+	"math"
 
 	"github.com/MedaiP90/GiTK/git"
 	"github.com/diamondburned/gotk4/pkg/cairo"
@@ -48,70 +46,33 @@ var laneColors = [][3]float64{
 	{0.659, 0.659, 0.659}, // Grey   (@grey_3)
 }
 
-// graphData stores the commit data for each DrawingArea, keyed by the
-// native C pointer. This is needed because ColumnViewCell.Child() returns
-// a *gtk.DrawingArea (the C type), not our custom Go wrapper.
-type graphData struct {
-	commit    git.GraphCommit
-	hasCommit bool
-}
-
-// graphDataMap is the global store for graph commit data.
-// Key: uintptr of the DrawingArea's native GObject pointer.
-var graphDataMap sync.Map
-
-// drawingAreaKey returns the map key for a DrawingArea.
-func drawingAreaKey(da *gtk.DrawingArea) uintptr {
-	return uintptr(unsafe.Pointer(da.Native()))
-}
-
 // NewGraphRenderer creates a new DrawingArea configured for graph rendering.
-// The returned *gtk.DrawingArea can be safely recovered from
-// ColumnViewCell.Child() without type assertion issues.
+// It initially draws nothing; call SetGraphCommit to bind data and trigger a redraw.
 func NewGraphRenderer() *gtk.DrawingArea {
 	da := gtk.NewDrawingArea()
-
-	// Store an empty graphData entry for this widget.
-	key := drawingAreaKey(da)
-	graphDataMap.Store(key, &graphData{})
-
-	// Set up the draw function.
-	da.SetDrawFunc(func(area *gtk.DrawingArea, cr *cairo.Context, width, height int) {
-		drawGraph(area, cr, width, height)
-	})
-
+	// Initial draw function does nothing (empty cell).
+	da.SetDrawFunc(func(area *gtk.DrawingArea, cr *cairo.Context, width, height int) {})
 	return da
 }
 
-// SetGraphCommit sets the commit data for a graph DrawingArea and triggers
-// a redraw. Use this instead of a method on a custom struct.
+// SetGraphCommit binds commit data to a DrawingArea by replacing its draw
+// function with a closure that captures the commit. This is called from the
+// ColumnView's bind callback on every row recycle.
 func SetGraphCommit(da *gtk.DrawingArea, commit git.GraphCommit) {
-	key := drawingAreaKey(da)
-	graphDataMap.Store(key, &graphData{commit: commit, hasCommit: true})
+	da.SetDrawFunc(func(area *gtk.DrawingArea, cr *cairo.Context, width, height int) {
+		drawGraph(cr, commit, width, height)
+	})
 	da.QueueDraw()
 }
 
 // ClearGraphCommit resets a recycled DrawingArea to the empty state.
 func ClearGraphCommit(da *gtk.DrawingArea) {
-	key := drawingAreaKey(da)
-	graphDataMap.Store(key, &graphData{})
+	da.SetDrawFunc(func(area *gtk.DrawingArea, cr *cairo.Context, width, height int) {})
 	da.QueueDraw()
 }
 
-// drawGraph is the Cairo drawing function called by GTK for each frame.
-// It renders the lane lines, edges, and commit node for this row.
-func drawGraph(da *gtk.DrawingArea, cr *cairo.Context, width, height int) {
-	key := drawingAreaKey(da)
-	val, ok := graphDataMap.Load(key)
-	if !ok {
-		return
-	}
-	gd := val.(*graphData)
-	if !gd.hasCommit {
-		return
-	}
-
-	c := gd.commit
+// drawGraph renders the lane lines, edges, and commit node for one row.
+func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 	centerY := float64(height) / 2.0
 
 	// --- Draw pass-through lane lines ---
@@ -152,7 +113,7 @@ func drawGraph(da *gtk.DrawingArea, cr *cairo.Context, width, height int) {
 	if c.IsHead {
 		cr.SetSourceRGB(color[0], color[1], color[2])
 		cr.SetLineWidth(1.5)
-		cr.Arc(nodeX, centerY, nodeRadius+3, 0, 2*3.14159)
+		cr.Arc(nodeX, centerY, nodeRadius+3, 0, 2*math.Pi)
 		cr.Stroke()
 	}
 }
@@ -193,7 +154,7 @@ func drawEdge(cr *cairo.Context, edge git.GraphEdge, centerY float64, height int
 // drawCircle draws a filled circle at the given position.
 func drawCircle(cr *cairo.Context, x, y, radius float64, color [3]float64) {
 	cr.SetSourceRGB(color[0], color[1], color[2])
-	cr.Arc(x, y, radius, 0, 2*3.14159)
+	cr.Arc(x, y, radius, 0, 2*math.Pi)
 	cr.Fill()
 }
 

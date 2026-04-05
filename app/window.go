@@ -536,6 +536,9 @@ func (w *Window) buildContentArea() {
 		}
 	}, func() {
 		w.updateStagingBadge()
+	}, func() {
+		// Resolve Conflicts button clicked in staging banner.
+		w.openMergeForConflicts()
 	}, w.ShowToast)
 	w.stagingPage = w.contentStack.AddTitledWithIcon(
 		w.stagingView.Root, "staging", "Staging", "document-edit-symbolic",
@@ -580,21 +583,26 @@ func (w *Window) buildContentArea() {
 					if len(remaining) > 0 {
 						w.openMergeForConflicts()
 					} else {
-						w.commitLog.Refresh()
-						w.stagingView.SetRepository(w.repo)
-						w.switchToView("staging")
+						w.onAllConflictsResolved()
 					}
 				})
 			}()
 		},
 		func() {
 			go func() {
-				err := w.repo.AbortMerge()
+				// Abort either merge or rebase depending on repo state.
+				state := w.repo.State()
+				var err error
+				if state == git.StateRebasing {
+					err = w.repo.AbortRebase()
+				} else {
+					err = w.repo.AbortMerge()
+				}
 				glib.IdleAdd(func() {
 					if err != nil {
 						w.ShowToast("Abort failed: " + err.Error())
 					} else {
-						w.ShowToast("Merge aborted")
+						w.ShowToast("Operation aborted")
 					}
 					w.commitLog.Refresh()
 					w.sidebar.RefreshBranches()
@@ -632,9 +640,16 @@ func (w *Window) buildContentArea() {
 			w.contentStack.SetVisibleChildName("log")
 		},
 		func(msg string) {
+			// Check if the rebase paused due to conflicts.
+			if strings.HasPrefix(msg, "rebase-conflict:") {
+				w.ShowToast("Rebase paused — resolve conflicts to continue")
+				w.openMergeForConflicts()
+				return
+			}
 			w.ShowToast(msg)
 			if w.repo != nil {
 				w.commitLog.SetRepository(w.repo)
+				w.sidebar.RefreshBranches()
 			}
 		},
 	)
@@ -998,6 +1013,42 @@ func (w *Window) onBranchMerge(branchName string) {
 		}()
 	})
 	dialog.Present(w.window)
+}
+
+// onAllConflictsResolved is called when the last conflicted file has been
+// resolved. If a rebase is in progress, it continues the rebase; otherwise
+// it switches to the staging view for the user to commit the merge.
+func (w *Window) onAllConflictsResolved() {
+	state := w.repo.State()
+	if state == git.StateRebasing {
+		// Continue the rebase in background.
+		go func() {
+			err := w.repo.ContinueRebase()
+			glib.IdleAdd(func() {
+				if err != nil {
+					msg := err.Error()
+					// Rebase may pause again on the next commit.
+					if w.repo.State() == git.StateRebasing {
+						w.ShowToast("Rebase paused again — resolve next conflict")
+						w.openMergeForConflicts()
+						return
+					}
+					w.ShowToast("Rebase continue failed: " + msg)
+				} else {
+					w.ShowToast("Rebase completed")
+				}
+				w.commitLog.Refresh()
+				w.sidebar.RefreshBranches()
+				w.switchToView("log")
+			})
+		}()
+		return
+	}
+
+	// Normal merge — go to staging so the user can commit.
+	w.commitLog.Refresh()
+	w.stagingView.SetRepository(w.repo)
+	w.switchToView("staging")
 }
 
 // openMergeForConflicts detects conflicted files and opens the merge view

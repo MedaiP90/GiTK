@@ -323,7 +323,7 @@ func (cl *CommitLog) addGraphColumn() {
 	factory.ConnectSetup(func(obj *coreglib.Object) {
 		item := toCell(obj)
 		renderer := NewGraphRenderer()
-		renderer.SetSizeRequest(120, 28)
+		renderer.SetSizeRequest(120, rowHeight)
 		item.SetChild(renderer)
 	})
 

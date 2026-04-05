@@ -47,6 +47,10 @@ type OnStashRequested func()
 // the number of changes may have changed (after stage/unstage/discard/commit).
 type OnChangesUpdated func()
 
+// OnResolveConflicts is called when the user clicks the "Resolve Conflicts"
+// button in the staging area banner.
+type OnResolveConflicts func()
+
 // StagingView is the staging area widget.
 type StagingView struct {
 	// Root is the top-level widget.
@@ -66,6 +70,12 @@ type StagingView struct {
 
 	// onChangesUpdated is called when changes are staged/unstaged/discarded.
 	onChangesUpdated OnChangesUpdated
+
+	// onResolveConflicts is called when the user clicks "Resolve Conflicts".
+	onResolveConflicts OnResolveConflicts
+
+	// conflictBanner is the info bar shown when merge/rebase conflicts exist.
+	conflictBanner *gtk.InfoBar
 
 	// stagedListBox shows staged files.
 	stagedListBox *gtk.ListBox
@@ -106,13 +116,14 @@ type StagingView struct {
 // Parameters:
 //   - cfg: the app configuration.
 //   - onCommitCreated: callback after a successful commit.
-func New(cfg *config.Config, onCommitCreated OnCommitCreated, onStashRequested OnStashRequested, onChangesUpdated OnChangesUpdated, showToast func(string)) *StagingView {
+func New(cfg *config.Config, onCommitCreated OnCommitCreated, onStashRequested OnStashRequested, onChangesUpdated OnChangesUpdated, onResolveConflicts OnResolveConflicts, showToast func(string)) *StagingView {
 	sv := &StagingView{
-		cfg:              cfg,
-		onCommitCreated:  onCommitCreated,
-		onStashRequested: onStashRequested,
-		onChangesUpdated: onChangesUpdated,
-		showToastFn:      showToast,
+		cfg:                cfg,
+		onCommitCreated:    onCommitCreated,
+		onStashRequested:   onStashRequested,
+		onChangesUpdated:   onChangesUpdated,
+		onResolveConflicts: onResolveConflicts,
+		showToastFn:        showToast,
 	}
 
 	sv.build()
@@ -160,6 +171,28 @@ func (sv *StagingView) build() {
 	actionBar.Append(stashBtn)
 
 	filePanel.Append(actionBar)
+
+	// --- Conflict resolution banner ---
+	sv.conflictBanner = gtk.NewInfoBar()
+	sv.conflictBanner.SetMessageType(gtk.MessageWarning)
+	sv.conflictBanner.SetShowCloseButton(false)
+	sv.conflictBanner.SetVisible(false)
+
+	bannerLabel := gtk.NewLabel("Merge/rebase conflicts detected. Resolve them to continue.")
+	bannerLabel.SetXAlign(0)
+	bannerLabel.SetWrap(true)
+	sv.conflictBanner.AddChild(bannerLabel)
+
+	resolveBtn := gtk.NewButtonWithLabel("Resolve Conflicts")
+	resolveBtn.AddCSSClass("suggested-action")
+	resolveBtn.ConnectClicked(func() {
+		if sv.onResolveConflicts != nil {
+			sv.onResolveConflicts()
+		}
+	})
+	sv.conflictBanner.AddActionWidget(resolveBtn, 1)
+
+	filePanel.Append(sv.conflictBanner)
 
 	// --- Unstaged changes section (FIRST — above staged) ---
 	unstagedLabel := gtk.NewLabel("Unstaged Changes")
@@ -474,6 +507,11 @@ func (sv *StagingView) Refresh() {
 	selectedStaged := sv.hunkView.isStaged
 
 	// Clear existing rows.
+	// Show/hide conflict banner based on repo state.
+	state := sv.repo.State()
+	hasConflicts := state == git.StateMerging || state == git.StateRebasing
+	sv.conflictBanner.SetVisible(hasConflicts)
+
 	clearListBox(sv.stagedListBox)
 	clearListBox(sv.unstagedListBox)
 
