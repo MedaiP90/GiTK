@@ -72,6 +72,12 @@ type Config struct {
 	// sorted alphabetically.
 	BranchOrder []string `json:"branch_order,omitempty"`
 
+	// WindowWidth is the last saved window width in pixels.
+	WindowWidth int `json:"window_width"`
+
+	// WindowHeight is the last saved window height in pixels.
+	WindowHeight int `json:"window_height"`
+
 	// configPath is the full path to the config file on disk.
 	// This is not serialized — it's set when loading.
 	configPath string `json:"-"`
@@ -179,6 +185,8 @@ func Default() *Config {
 			ShowTags:    true,
 			ShowRemotes: true,
 		},
+		WindowWidth:  1200,
+		WindowHeight: 800,
 	}
 }
 

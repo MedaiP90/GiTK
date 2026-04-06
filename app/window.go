@@ -146,7 +146,14 @@ func NewWindow(gitkApp *GiTKApp, app *adw.Application, cfg *config.Config) *Wind
 	// directly in a libadwaita app.
 	w.window = adw.NewApplicationWindow(&app.Application)
 	w.window.SetTitle("GiTK")
-	w.window.SetDefaultSize(1200, 800)
+	winW, winH := cfg.WindowWidth, cfg.WindowHeight
+	if winW <= 0 {
+		winW = 1200
+	}
+	if winH <= 0 {
+		winH = 800
+	}
+	w.window.SetDefaultSize(winW, winH)
 
 	// --- Load app icon ---
 	// The icon lives under resources/hicolor/256x256/apps/<AppID>.png,
@@ -218,7 +225,19 @@ columnview > listview > row {
 	// Provide window reference to views that need it for dialogs.
 	w.stashView.SetWindow(w.window)
 
-	slog.Info("main window created", "width", 1200, "height", 800)
+	// Save window size on close so it can be restored on next startup.
+	w.window.ConnectCloseRequest(func() bool {
+		width := w.window.Width()
+		height := w.window.Height()
+		cfg.WindowWidth = width
+		cfg.WindowHeight = height
+		if err := cfg.Save(); err != nil {
+			slog.Warn("failed to save window size", "error", err)
+		}
+		return false // allow the window to close
+	})
+
+	slog.Info("main window created", "width", winW, "height", winH)
 
 	return w
 }
