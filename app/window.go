@@ -741,6 +741,19 @@ func (w *Window) onRepoSelected(repo *git.Repository) {
 	w.badgeStopCh = make(chan struct{})
 	go w.badgePollLoop(w.badgeStopCh)
 
+	// Fetch from origin in the background so the view is up-to-date.
+	go func() {
+		err := repo.Fetch(w.cfg.Git.PruneOnFetch)
+		glib.IdleAdd(func() {
+			if err != nil {
+				slog.Debug("fetch on open failed", "error", err)
+				return
+			}
+			w.sidebar.RefreshBranches()
+			w.commitLog.Refresh()
+		})
+	}()
+
 	slog.Info("repository selected", "path", repo.Path())
 }
 

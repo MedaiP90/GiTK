@@ -79,16 +79,23 @@ func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 	// Build a set of lanes that have incoming edges at this row.
 	// These lanes are being merged into the commit's lane via a Bezier
 	// curve, so we must NOT draw a straight pass-through line for them.
-	incomingLanes := make(map[int]bool, len(c.IncomingEdges))
+	skipLanes := make(map[int]bool, len(c.IncomingEdges)+len(c.Edges))
 	for _, edge := range c.IncomingEdges {
-		incomingLanes[edge.FromLane] = true
+		skipLanes[edge.FromLane] = true
+	}
+	// Also skip lanes that are the target of an outgoing cross-lane edge
+	// from this commit — the Bezier curve handles the visual connection.
+	for _, edge := range c.Edges {
+		if edge.FromLane != edge.ToLane {
+			skipLanes[edge.ToLane] = true
+		}
 	}
 
 	// --- Pass 1: Draw active lane pass-through lines ---
 	// Skip the commit's own lane (handled in Pass 2) and lanes that
-	// have an incoming edge (handled by the Bezier curve in Pass 4).
+	// have an incoming/outgoing edge (handled by a Bezier curve).
 	for _, lane := range c.ActiveLanes {
-		if lane == c.Lane || incomingLanes[lane] {
+		if lane == c.Lane || skipLanes[lane] {
 			continue
 		}
 		x := float64(lane)*laneWidth + laneWidth/2.0
