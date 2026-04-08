@@ -151,7 +151,7 @@ func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 	}
 
 	// --- Pass 5: Draw the commit node on top ---
-	if c.IsMerge {
+	if c.IsMerge && !c.IsHead {
 		drawCross(cr, nodeX, centerY, nodeRadius+2, 2.5, ownColor)
 	} else {
 		drawCircle(cr, nodeX, centerY, nodeRadius, ownColor)
