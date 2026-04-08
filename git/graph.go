@@ -77,6 +77,19 @@ type GraphCommit struct {
 	// passing through this row (including the commit's own lane).
 	// The renderer uses this to draw pass-through lane lines.
 	ActiveLanes []int
+
+	// IncomingEdges are edges arriving from child commits in other lanes.
+	// These occur when multiple children pointed to this commit from
+	// different lanes (branch divergence when viewed bottom-to-top).
+	// The renderer draws these as curves from the top of the row to
+	// the commit's node center.
+	IncomingEdges []GraphEdge
+
+	// IsLaneTip is true when this commit is the tip (topmost) of its lane,
+	// meaning no child was waiting for it — it's the start of a branch.
+	// The renderer draws center→bottom instead of full-height for the
+	// commit's own lane.
+	IsLaneTip bool
 }
 
 // GraphEdge describes a line to draw from this commit's lane to a
@@ -279,16 +292,24 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 	result := make([]GraphCommit, 0, len(commits))
 
 	for _, ci := range commits {
-		// Find or assign a lane for this commit.
+		// Find ALL lanes waiting for this commit (multiple children may
+		// have pointed here from different lanes — diverging branches).
 		lane := -1
+		var convergingLanes []int
 
-		// Check if any active lane is waiting for this commit.
 		for l, waitingFor := range activeLanes {
 			if waitingFor == ci.Hash {
-				lane = l
-				break
+				if lane == -1 {
+					lane = l // Primary lane for this commit.
+				} else {
+					convergingLanes = append(convergingLanes, l)
+				}
 			}
 		}
+
+		// isLaneTip means no child was waiting for this commit — it's the
+		// topmost commit on its lane (branch tip).
+		isLaneTip := lane == -1
 
 		if lane == -1 {
 			// No lane is waiting for this commit. Find a free lane or create a new one.
@@ -305,9 +326,27 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 			lane = MaxLanes - 1
 		}
 
+		// Build incoming edges from converging lanes.
+		var incomingEdges []GraphEdge
+		for _, cl := range convergingLanes {
+			if cl >= MaxLanes {
+				cl = MaxLanes - 1
+			}
+			if cl != lane {
+				incomingEdges = append(incomingEdges, GraphEdge{
+					FromLane: cl,
+					ToLane:   lane,
+					Style:    EdgeSolid,
+				})
+			}
+		}
+
 		commitLane[ci.Hash] = lane
 
-		// Compute edges to parents.
+		// Compute edges to parents BEFORE freeing converging lanes, so that
+		// findFreeLane won't reuse a converging lane for a new parent. This
+		// prevents the same lane slot from being both an incoming Bezier
+		// source and a new pass-through line in the same row.
 		edges := make([]GraphEdge, 0, len(ci.ParentHashes))
 
 		for parentIdx, parentHash := range ci.ParentHashes {
@@ -355,6 +394,13 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 			})
 		}
 
+		// NOW free converging lanes — after parent allocation is done.
+		for _, cl := range convergingLanes {
+			if cl < len(activeLanes) {
+				activeLanes[cl] = ""
+			}
+		}
+
 		// If this commit has no parents (root commit), free its lane.
 		if len(ci.ParentHashes) == 0 {
 			activeLanes[lane] = ""
@@ -371,19 +417,21 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 
 		// Build the GraphCommit.
 		gc := GraphCommit{
-			Hash:         ci.Hash,
-			ShortHash:    ci.ShortHash,
-			Subject:      ci.Subject,
-			Author:       ci.Author,
-			AuthorEmail:  ci.AuthorEmail,
-			Timestamp:    ci.AuthorTime,
-			Lane:         lane,
-			Edges:        edges,
-			Refs:         refMap[ci.Hash],
-			IsMerge:      ci.IsMerge,
-			IsHead:       ci.Hash == headHash,
-			ParentHashes: ci.ParentHashes,
-			ActiveLanes:  active,
+			Hash:          ci.Hash,
+			ShortHash:     ci.ShortHash,
+			Subject:       ci.Subject,
+			Author:        ci.Author,
+			AuthorEmail:   ci.AuthorEmail,
+			Timestamp:     ci.AuthorTime,
+			Lane:          lane,
+			Edges:         edges,
+			IncomingEdges: incomingEdges,
+			Refs:          refMap[ci.Hash],
+			IsMerge:       ci.IsMerge,
+			IsHead:        ci.Hash == headHash,
+			ParentHashes:  ci.ParentHashes,
+			ActiveLanes:   active,
+			IsLaneTip:     isLaneTip,
 		}
 
 		result = append(result, gc)

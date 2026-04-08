@@ -420,9 +420,17 @@ func (rv *RebaseView) startRebase() {
 		glib.IdleAdd(func() {
 			rv.startBtn.SetSensitive(true)
 			if err != nil {
+				msg := err.Error()
 				slog.Warn("rebase failed", "error", err)
+				// Check if rebase paused due to conflicts.
+				if rv.repo.State() == git.StateRebasing {
+					if rv.onDone != nil {
+						rv.onDone("rebase-conflict:" + msg)
+					}
+					return
+				}
 				if rv.onDone != nil {
-					rv.onDone("Rebase failed: " + err.Error())
+					rv.onDone("Rebase failed: " + msg)
 				}
 				return
 			}

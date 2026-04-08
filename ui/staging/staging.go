@@ -47,6 +47,18 @@ type OnStashRequested func()
 // the number of changes may have changed (after stage/unstage/discard/commit).
 type OnChangesUpdated func()
 
+// OnResolveConflicts is called when the user clicks the "Resolve Conflicts"
+// button in the staging area banner.
+type OnResolveConflicts func()
+
+// OnAbortOperation is called when the user clicks "Abort" in the conflict
+// banner to cancel the current merge/rebase.
+type OnAbortOperation func()
+
+// OnSkipConflict is called when the user clicks "Skip" in the conflict
+// banner during a rebase to skip the current conflicting commit.
+type OnSkipConflict func()
+
 // StagingView is the staging area widget.
 type StagingView struct {
 	// Root is the top-level widget.
@@ -66,6 +78,24 @@ type StagingView struct {
 
 	// onChangesUpdated is called when changes are staged/unstaged/discarded.
 	onChangesUpdated OnChangesUpdated
+
+	// onResolveConflicts is called when the user clicks "Resolve Conflicts".
+	onResolveConflicts OnResolveConflicts
+
+	// onAbortOperation is called when the user clicks "Abort".
+	onAbortOperation OnAbortOperation
+
+	// onSkipConflict is called when the user clicks "Skip" during rebase.
+	onSkipConflict OnSkipConflict
+
+	// conflictBanner is the info bar shown when merge/rebase conflicts exist.
+	conflictBanner *gtk.InfoBar
+
+	// conflictBannerLabel is the text inside the conflict banner.
+	conflictBannerLabel *gtk.Label
+
+	// skipBtn is shown only during rebase conflicts.
+	skipBtn *gtk.Button
 
 	// stagedListBox shows staged files.
 	stagedListBox *gtk.ListBox
@@ -106,13 +136,16 @@ type StagingView struct {
 // Parameters:
 //   - cfg: the app configuration.
 //   - onCommitCreated: callback after a successful commit.
-func New(cfg *config.Config, onCommitCreated OnCommitCreated, onStashRequested OnStashRequested, onChangesUpdated OnChangesUpdated, showToast func(string)) *StagingView {
+func New(cfg *config.Config, onCommitCreated OnCommitCreated, onStashRequested OnStashRequested, onChangesUpdated OnChangesUpdated, onResolveConflicts OnResolveConflicts, onAbortOperation OnAbortOperation, onSkipConflict OnSkipConflict, showToast func(string)) *StagingView {
 	sv := &StagingView{
-		cfg:              cfg,
-		onCommitCreated:  onCommitCreated,
-		onStashRequested: onStashRequested,
-		onChangesUpdated: onChangesUpdated,
-		showToastFn:      showToast,
+		cfg:                cfg,
+		onCommitCreated:    onCommitCreated,
+		onStashRequested:   onStashRequested,
+		onChangesUpdated:   onChangesUpdated,
+		onResolveConflicts: onResolveConflicts,
+		onAbortOperation:   onAbortOperation,
+		onSkipConflict:     onSkipConflict,
+		showToastFn:        showToast,
 	}
 
 	sv.build()
@@ -160,6 +193,52 @@ func (sv *StagingView) build() {
 	actionBar.Append(stashBtn)
 
 	filePanel.Append(actionBar)
+
+	// --- Conflict resolution banner ---
+	sv.conflictBanner = gtk.NewInfoBar()
+	sv.conflictBanner.SetMessageType(gtk.MessageWarning)
+	sv.conflictBanner.SetShowCloseButton(false)
+	sv.conflictBanner.SetVisible(false)
+
+	sv.conflictBannerLabel = gtk.NewLabel("")
+	sv.conflictBannerLabel.SetXAlign(0)
+	sv.conflictBannerLabel.SetWrap(true)
+	sv.conflictBanner.AddChild(sv.conflictBannerLabel)
+
+	// Button box for banner actions.
+	bannerBtnBox := gtk.NewBox(gtk.OrientationHorizontal, 6)
+
+	resolveBtn := gtk.NewButtonWithLabel("Resolve Conflicts")
+	resolveBtn.AddCSSClass("suggested-action")
+	resolveBtn.ConnectClicked(func() {
+		if sv.onResolveConflicts != nil {
+			sv.onResolveConflicts()
+		}
+	})
+	bannerBtnBox.Append(resolveBtn)
+
+	sv.skipBtn = gtk.NewButtonWithLabel("Skip")
+	sv.skipBtn.SetTooltipText("Skip this commit and continue rebase")
+	sv.skipBtn.ConnectClicked(func() {
+		if sv.onSkipConflict != nil {
+			sv.onSkipConflict()
+		}
+	})
+	bannerBtnBox.Append(sv.skipBtn)
+
+	abortBtn := gtk.NewButtonWithLabel("Abort")
+	abortBtn.AddCSSClass("destructive-action")
+	abortBtn.SetTooltipText("Abort the current merge or rebase")
+	abortBtn.ConnectClicked(func() {
+		if sv.onAbortOperation != nil {
+			sv.onAbortOperation()
+		}
+	})
+	bannerBtnBox.Append(abortBtn)
+
+	sv.conflictBanner.AddActionWidget(bannerBtnBox, 1)
+
+	filePanel.Append(sv.conflictBanner)
 
 	// --- Unstaged changes section (FIRST — above staged) ---
 	unstagedLabel := gtk.NewLabel("Unstaged Changes")
@@ -474,6 +553,20 @@ func (sv *StagingView) Refresh() {
 	selectedStaged := sv.hunkView.isStaged
 
 	// Clear existing rows.
+	// Show/hide conflict banner based on repo state.
+	state := sv.repo.State()
+	hasConflicts := state == git.StateMerging || state == git.StateRebasing
+	sv.conflictBanner.SetVisible(hasConflicts)
+	if hasConflicts {
+		if state == git.StateRebasing {
+			sv.conflictBannerLabel.SetText("Rebase paused — conflicts need to be resolved before continuing.")
+			sv.skipBtn.SetVisible(true)
+		} else {
+			sv.conflictBannerLabel.SetText("Merge conflicts detected — resolve them to complete the merge.")
+			sv.skipBtn.SetVisible(false)
+		}
+	}
+
 	clearListBox(sv.stagedListBox)
 	clearListBox(sv.unstagedListBox)
 
@@ -607,17 +700,27 @@ func (sv *StagingView) createFileRow(change git.FileChange, isStaged bool) *adw.
 	if isStaged {
 		code = change.Staging
 	}
-	switch code {
-	case git.StatusAdded, git.StatusUntracked:
+	isConflict := code == git.StatusUnmerged ||
+		(change.Staging == git.StatusUnmerged && change.Worktree == git.StatusUnmerged)
+
+	switch {
+	case isConflict:
+		iconName = "dialog-warning-symbolic"
+	case code == git.StatusAdded || code == git.StatusUntracked:
 		iconName = "list-add-symbolic"
-	case git.StatusDeleted:
+	case code == git.StatusDeleted:
 		iconName = "list-remove-symbolic"
-	case git.StatusModified:
+	case code == git.StatusModified:
 		iconName = "document-edit-symbolic"
-	case git.StatusRenamed:
+	case code == git.StatusRenamed:
 		iconName = "edit-find-replace-symbolic"
 	default:
 		iconName = "document-edit-symbolic"
+	}
+
+	if isConflict {
+		row.SetSubtitle("Conflicted")
+		row.AddCSSClass("error")
 	}
 	row.SetIconName(iconName)
 
