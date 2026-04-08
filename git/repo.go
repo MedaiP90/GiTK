@@ -426,6 +426,9 @@ func (r *Repository) Log(maxCount int) ([]CommitInfo, error) {
 		return nil, fmt.Errorf("iterate log: %w", err)
 	}
 
+	// Ensure commits are sorted by timestamp (newest first) for the lane assignment algorithm.
+	SortCommitsByTimestamp(commits)
+
 	return commits, nil
 }
 
@@ -461,6 +464,9 @@ func (r *Repository) LogAll(maxCount int) ([]CommitInfo, error) {
 	if err != nil && err.Error() != "limit reached" {
 		return nil, fmt.Errorf("iterate log (all): %w", err)
 	}
+
+	// Ensure commits are sorted by timestamp (newest first) for the lane assignment algorithm.
+	SortCommitsByTimestamp(commits)
 
 	return commits, nil
 }

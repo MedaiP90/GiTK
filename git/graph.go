@@ -205,9 +205,6 @@ func BuildGraph(repo *Repository, opts GraphOptions) ([]GraphCommit, error) {
 		return nil, nil
 	}
 
-	// Ensure commits are sorted by timestamp (newest first) for the lane assignment algorithm.
-	SortCommitsByTimestamp(commits)
-
 	// Step 2: Build ref map (hash → list of refs).
 	refMap, err := buildRefMap(repo, opts)
 	if err != nil {
