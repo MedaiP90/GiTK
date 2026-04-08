@@ -89,6 +89,30 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 	recentGroup.Add(maxRecentRow)
 
 	appPage.Add(recentGroup)
+
+	// Merge Tool subsection.
+	mergeToolGroup := adw.NewPreferencesGroup()
+	mergeToolGroup.SetTitle("Merge Tool")
+	mergeToolGroup.SetDescription("Configure how merge conflicts are resolved")
+
+	useExternalRow := adw.NewSwitchRow()
+	useExternalRow.SetTitle("Use External Merge Tool")
+	useExternalRow.SetSubtitle("Launch an external tool instead of the built-in editor")
+	useExternalRow.SetActive(cfg.MergeTool.UseExternal)
+	mergeToolGroup.Add(useExternalRow)
+
+	externalCmdRow := adw.NewEntryRow()
+	externalCmdRow.SetTitle("External Tool Command")
+	externalCmdRow.SetText(cfg.MergeTool.ExternalCommand)
+	externalCmdRow.SetSensitive(cfg.MergeTool.UseExternal)
+	mergeToolGroup.Add(externalCmdRow)
+
+	// Toggle command entry sensitivity based on switch state.
+	useExternalRow.NotifyProperty("active", func() {
+		externalCmdRow.SetSensitive(useExternalRow.Active())
+	})
+
+	appPage.Add(mergeToolGroup)
 	win.Add(appPage)
 
 	// --- Git Page ---
@@ -255,6 +279,10 @@ func Show(parent *adw.ApplicationWindow, cfg *config.Config) {
 		if maxRecent, err := strconv.Atoi(maxRecentRow.Text()); err == nil && maxRecent > 0 {
 			cfg.MaxRecent = maxRecent
 		}
+
+		// Merge tool settings.
+		cfg.MergeTool.UseExternal = useExternalRow.Active()
+		cfg.MergeTool.ExternalCommand = externalCmdRow.Text()
 
 		// Git settings.
 		cfg.Git.AuthorName = nameRow.Text()

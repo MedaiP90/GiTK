@@ -24,6 +24,7 @@ package git
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"time"
 )
@@ -77,6 +78,19 @@ type GraphCommit struct {
 	// passing through this row (including the commit's own lane).
 	// The renderer uses this to draw pass-through lane lines.
 	ActiveLanes []int
+
+	// IncomingEdges are edges arriving from child commits in other lanes.
+	// These occur when multiple children pointed to this commit from
+	// different lanes (branch divergence when viewed bottom-to-top).
+	// The renderer draws these as curves from the top of the row to
+	// the commit's node center.
+	IncomingEdges []GraphEdge
+
+	// IsLaneTip is true when this commit is the tip (topmost) of its lane,
+	// meaning no child was waiting for it — it's the start of a branch.
+	// The renderer draws center→bottom instead of full-height for the
+	// commit's own lane.
+	IsLaneTip bool
 }
 
 // GraphEdge describes a line to draw from this commit's lane to a
@@ -273,31 +287,49 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 	// A nil/empty string means the lane is free.
 	activeLanes := make([]string, 0)
 
-	// commitLane maps commit hash → lane index (for commits we've already placed).
-	commitLane := make(map[string]int)
+	// List of nodes that have children from other lanes.
+	parentsWaiting := make([]string, 0)
 
 	result := make([]GraphCommit, 0, len(commits))
 
 	for _, ci := range commits {
-		// Find or assign a lane for this commit.
+		// Find ALL lanes waiting for this commit (multiple children may
+		// have pointed here from different lanes — diverging branches).
 		lane := -1
+		var convergingLanes []int
 
-		// Check if any active lane is waiting for this commit.
 		for l, waitingFor := range activeLanes {
 			if waitingFor == ci.Hash {
-				lane = l
-				break
+				if lane == -1 {
+					lane = l // Primary lane for this commit.
+				} else {
+					convergingLanes = append(convergingLanes, l)
+				}
 			}
 		}
+
+		// isParent means at least one child commit was waiting for this commit
+		isParent := slices.Contains(parentsWaiting, ci.Hash)
+
+		if isParent {
+		  // Remove this commit from parentsWaiting since we're processing it now.
+			parentsWaiting = slices.DeleteFunc(parentsWaiting, func(p string) bool {
+        return p == ci.Hash
+      })
+		}
+
+		// isLaneTip means no child was waiting for this commit — it's the
+		// topmost commit on its lane (branch tip).
+		isLaneTip := lane == -1 && !isParent
 
 		if lane == -1 {
 			// No lane is waiting for this commit. Find a free lane or create a new one.
 			lane = findFreeLane(activeLanes)
-			if lane == -1 {
-				// All lanes are occupied — add a new one.
-				lane = len(activeLanes)
-				activeLanes = append(activeLanes, "")
-			}
+		}
+		if lane == -1 {
+			// All lanes are occupied — add a new one.
+			lane = len(activeLanes)
+			activeLanes = append(activeLanes, "")
 		}
 
 		// Cap at MaxLanes.
@@ -305,9 +337,29 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 			lane = MaxLanes - 1
 		}
 
-		commitLane[ci.Hash] = lane
+		// Build incoming edges from converging lanes.
+		var incomingEdges []GraphEdge
+		for _, cl := range convergingLanes {
+			if cl >= MaxLanes {
+				cl = MaxLanes - 1
+			}
+			if cl != lane {
+				incomingEdges = append(incomingEdges, GraphEdge{
+					FromLane: cl,
+					ToLane:   lane,
+					Style:    EdgeSolid,
+				})
+			}
+		}
 
-		// Compute edges to parents.
+		// Free converging lanes — after parent allocation is done.
+		for _, cl := range convergingLanes {
+			if cl < len(activeLanes) {
+				activeLanes[cl] = ""
+			}
+		}
+
+		// Compute edges to parents
 		edges := make([]GraphEdge, 0, len(ci.ParentHashes))
 
 		for parentIdx, parentHash := range ci.ParentHashes {
@@ -329,14 +381,16 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 
 				if parentLane == -1 {
 					// Find a free lane for this parent.
-					freeLane := findFreeLane(activeLanes)
-					if freeLane == -1 {
-						freeLane = len(activeLanes)
-						activeLanes = append(activeLanes, "")
-					}
-					activeLanes[freeLane] = parentHash
-					parentLane = freeLane
+					parentLane = findFreeLane(activeLanes)
 				}
+				if parentLane == -1 {
+				  // All lanes are occupied — add a new one.
+					parentLane = len(activeLanes)
+					activeLanes = append(activeLanes, "")
+				}
+
+				// Require the parent from another lane.
+				parentsWaiting = append(parentsWaiting, parentHash)
 			}
 
 			if parentLane >= MaxLanes {
@@ -371,19 +425,21 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 
 		// Build the GraphCommit.
 		gc := GraphCommit{
-			Hash:         ci.Hash,
-			ShortHash:    ci.ShortHash,
-			Subject:      ci.Subject,
-			Author:       ci.Author,
-			AuthorEmail:  ci.AuthorEmail,
-			Timestamp:    ci.AuthorTime,
-			Lane:         lane,
-			Edges:        edges,
-			Refs:         refMap[ci.Hash],
-			IsMerge:      ci.IsMerge,
-			IsHead:       ci.Hash == headHash,
-			ParentHashes: ci.ParentHashes,
-			ActiveLanes:  active,
+			Hash:          ci.Hash,
+			ShortHash:     ci.ShortHash,
+			Subject:       ci.Subject,
+			Author:        ci.Author,
+			AuthorEmail:   ci.AuthorEmail,
+			Timestamp:     ci.AuthorTime,
+			Lane:          lane,
+			Edges:         edges,
+			IncomingEdges: incomingEdges,
+			Refs:          refMap[ci.Hash],
+			IsMerge:       ci.IsMerge,
+			IsHead:        ci.Hash == headHash,
+			ParentHashes:  ci.ParentHashes,
+			ActiveLanes:   active,
+			IsLaneTip:     isLaneTip,
 		}
 
 		result = append(result, gc)

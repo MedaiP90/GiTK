@@ -75,26 +75,35 @@ func ShowPushDialog(parent *adw.ApplicationWindow, repo *git.Repository, onDone 
 	cancelBtn := gtk.NewButtonWithLabel("Cancel")
 	cancelBtn.ConnectClicked(func() { dialog.Close() })
 
+	spinner := gtk.NewSpinner()
+	spinner.SetVisible(false)
+
 	pushBtn := gtk.NewButtonWithLabel("Push")
 	pushBtn.AddCSSClass("suggested-action")
 	pushBtn.ConnectClicked(func() {
 		remote := comboSelectedString(remoteCombo, remoteNames)
 		force := forceRow.Active()
 
-		if force {
-			// Show destructive action confirmation.
-			showForceConfirmation(parent, func() {
-				doPush(dialog, repo, remote, true, onDone)
-			})
-			return
+		startOp := func() {
+			pushBtn.SetSensitive(false)
+			cancelBtn.SetSensitive(false)
+			spinner.SetVisible(true)
+			spinner.Start()
+			doPush(dialog, repo, remote, force, onDone)
 		}
 
-		doPush(dialog, repo, remote, false, onDone)
+		if force {
+			showForceConfirmation(parent, startOp)
+			return
+		}
+		startOp()
 	})
 
 	btnBox := gtk.NewBox(gtk.OrientationHorizontal, 12)
 	btnBox.SetHAlign(gtk.AlignEnd)
+	btnBox.SetVAlign(gtk.AlignCenter)
 	btnBox.SetMarginTop(18)
+	btnBox.Append(spinner)
 	btnBox.Append(cancelBtn)
 	btnBox.Append(pushBtn)
 
@@ -236,11 +245,19 @@ func ShowPullDialog(parent *adw.ApplicationWindow, repo *git.Repository, onDone 
 	cancelBtn := gtk.NewButtonWithLabel("Cancel")
 	cancelBtn.ConnectClicked(func() { dialog.Close() })
 
+	spinner := gtk.NewSpinner()
+	spinner.SetVisible(false)
+
 	pullBtn := gtk.NewButtonWithLabel("Pull")
 	pullBtn.AddCSSClass("suggested-action")
 	pullBtn.ConnectClicked(func() {
 		remote := comboSelectedString(remoteCombo, remoteNames)
 		branch := comboSelectedString(branchCombo, branchNames)
+
+		pullBtn.SetSensitive(false)
+		cancelBtn.SetSensitive(false)
+		spinner.SetVisible(true)
+		spinner.Start()
 
 		go func() {
 			err := repo.Pull(remote, branch)
@@ -262,7 +279,9 @@ func ShowPullDialog(parent *adw.ApplicationWindow, repo *git.Repository, onDone 
 
 	btnBox := gtk.NewBox(gtk.OrientationHorizontal, 12)
 	btnBox.SetHAlign(gtk.AlignEnd)
+	btnBox.SetVAlign(gtk.AlignCenter)
 	btnBox.SetMarginTop(18)
+	btnBox.Append(spinner)
 	btnBox.Append(cancelBtn)
 	btnBox.Append(pullBtn)
 

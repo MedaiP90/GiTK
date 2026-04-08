@@ -10,15 +10,13 @@
 // vector graphics. Colors come from the GNOME palette to ensure they
 // look good in both light and dark themes.
 //
-// Design note: We cannot embed *gtk.DrawingArea in a custom Go struct and
-// recover it from ColumnViewCell.Child(), because gotk4 wraps the C pointer
-// as *gtk.DrawingArea — our Go struct is lost. Instead, we store the commit
-// data in a package-level sync.Map keyed by the DrawingArea's native pointer.
+// Data is passed to each DrawingArea by resetting its draw function closure
+// on every bind. This avoids the fragile sync.Map + native-pointer key
+// approach and works reliably with GTK4's list-item recycling.
 package commitlog
 
 import (
-	"sync"
-	"unsafe"
+	"math"
 
 	"github.com/MedaiP90/GiTK/git"
 	"github.com/diamondburned/gotk4/pkg/cairo"
@@ -48,78 +46,57 @@ var laneColors = [][3]float64{
 	{0.659, 0.659, 0.659}, // Grey   (@grey_3)
 }
 
-// graphData stores the commit data for each DrawingArea, keyed by the
-// native C pointer. This is needed because ColumnViewCell.Child() returns
-// a *gtk.DrawingArea (the C type), not our custom Go wrapper.
-type graphData struct {
-	commit    git.GraphCommit
-	hasCommit bool
-}
-
-// graphDataMap is the global store for graph commit data.
-// Key: uintptr of the DrawingArea's native GObject pointer.
-var graphDataMap sync.Map
-
-// drawingAreaKey returns the map key for a DrawingArea.
-func drawingAreaKey(da *gtk.DrawingArea) uintptr {
-	return uintptr(unsafe.Pointer(da.Native()))
-}
-
 // NewGraphRenderer creates a new DrawingArea configured for graph rendering.
-// The returned *gtk.DrawingArea can be safely recovered from
-// ColumnViewCell.Child() without type assertion issues.
+// It initially draws nothing; call SetGraphCommit to bind data and trigger a redraw.
 func NewGraphRenderer() *gtk.DrawingArea {
 	da := gtk.NewDrawingArea()
-
-	// Store an empty graphData entry for this widget.
-	key := drawingAreaKey(da)
-	graphDataMap.Store(key, &graphData{})
-
-	// Set up the draw function.
-	da.SetDrawFunc(func(area *gtk.DrawingArea, cr *cairo.Context, width, height int) {
-		drawGraph(area, cr, width, height)
-	})
-
+	// Initial draw function does nothing (empty cell).
+	da.SetDrawFunc(func(area *gtk.DrawingArea, cr *cairo.Context, width, height int) {})
 	return da
 }
 
-// SetGraphCommit sets the commit data for a graph DrawingArea and triggers
-// a redraw. Use this instead of a method on a custom struct.
+// SetGraphCommit binds commit data to a DrawingArea by replacing its draw
+// function with a closure that captures the commit. This is called from the
+// ColumnView's bind callback on every row recycle.
 func SetGraphCommit(da *gtk.DrawingArea, commit git.GraphCommit) {
-	key := drawingAreaKey(da)
-	graphDataMap.Store(key, &graphData{commit: commit, hasCommit: true})
+	da.SetDrawFunc(func(area *gtk.DrawingArea, cr *cairo.Context, width, height int) {
+		drawGraph(cr, commit, width, height)
+	})
 	da.QueueDraw()
 }
 
 // ClearGraphCommit resets a recycled DrawingArea to the empty state.
 func ClearGraphCommit(da *gtk.DrawingArea) {
-	key := drawingAreaKey(da)
-	graphDataMap.Store(key, &graphData{})
+	da.SetDrawFunc(func(area *gtk.DrawingArea, cr *cairo.Context, width, height int) {})
 	da.QueueDraw()
 }
 
-// drawGraph is the Cairo drawing function called by GTK for each frame.
-// It renders the lane lines, edges, and commit node for this row.
-func drawGraph(da *gtk.DrawingArea, cr *cairo.Context, width, height int) {
-	key := drawingAreaKey(da)
-	val, ok := graphDataMap.Load(key)
-	if !ok {
-		return
-	}
-	gd := val.(*graphData)
-	if !gd.hasCommit {
-		return
+// drawGraph renders the lane lines, edges, and commit node for one row.
+//
+// The rendering follows a simple per-commit connection model:
+//   - Same-lane parent/child → vertical line segment
+//   - Cross-lane parent/child → Bezier curve
+//   - Root (no parents) → vertical line top-half only (top → center)
+//   - Tip (no same-lane child) → vertical line bottom-half only (center → bottom)
+//   - Other active lanes → full-height pass-through lines
+func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
+	h := float64(height)
+	centerY := h / 2.0
+
+	// Build a set of lanes that are merging INTO this commit via incoming
+	// edges. These lanes are terminated here and handled by Bezier curves,
+	// so they must NOT get a straight pass-through line.
+	incomingLanes := make(map[int]bool, len(c.IncomingEdges))
+	for _, edge := range c.IncomingEdges {
+		incomingLanes[edge.FromLane] = true
 	}
 
-	c := gd.commit
-	centerY := float64(height) / 2.0
-
-	// --- Draw pass-through lane lines ---
-	// These are vertical lines for lanes that have a branch/commit
-	// passing through this row without a node here.
+	// --- Pass 1: Draw active lane pass-through lines ---
+	// These are lanes that flow through this row without interacting with
+	// this commit. Skip the commit's own lane and incoming converging lanes.
 	for _, lane := range c.ActiveLanes {
-		if lane == c.Lane {
-			continue // The commit's own lane is drawn by edges/node.
+		if lane == c.Lane || incomingLanes[lane] {
+			continue
 		}
 		x := float64(lane)*laneWidth + laneWidth/2.0
 		color := laneColor(lane)
@@ -127,40 +104,74 @@ func drawGraph(da *gtk.DrawingArea, cr *cairo.Context, width, height int) {
 		cr.SetLineWidth(1.5)
 		cr.SetDash(nil, 0)
 		cr.MoveTo(x, 0)
-		cr.LineTo(x, float64(height))
+		cr.LineTo(x, h)
 		cr.Stroke()
 	}
 
-	// --- Draw edges (lines from this commit to its parents) ---
+	// --- Pass 2: Draw the commit's own lane vertical line ---
+	// Determine which halves to draw based on connectivity:
+	//   - drawTop: true if this commit has a same-lane child above (not a tip)
+	//   - drawBottom: true if this commit has a same-lane parent below (not root)
+	hasParents := len(c.Edges) > 0
+	drawTop := !c.IsLaneTip
+	drawBottom := hasParents // first parent is always same-lane
+
+	nodeX := float64(c.Lane)*laneWidth + laneWidth/2.0
+	ownColor := laneColor(c.Lane)
+
+	cr.SetSourceRGB(ownColor[0], ownColor[1], ownColor[2])
+	cr.SetLineWidth(1.5)
+	cr.SetDash(nil, 0)
+
+	if drawTop && drawBottom {
+		cr.MoveTo(nodeX, 0)
+		cr.LineTo(nodeX, h)
+		cr.Stroke()
+	} else if drawTop {
+		cr.MoveTo(nodeX, 0)
+		cr.LineTo(nodeX, centerY)
+		cr.Stroke()
+	} else if drawBottom {
+		cr.MoveTo(nodeX, centerY)
+		cr.LineTo(nodeX, h)
+		cr.Stroke()
+	}
+	// If neither drawTop nor drawBottom, the commit is an isolated node.
+
+	// --- Pass 3: Draw outgoing cross-lane edges (Bezier curves to parents) ---
 	for _, edge := range c.Edges {
-		drawEdge(cr, edge, centerY, height)
+		if edge.FromLane != edge.ToLane {
+			drawOutgoingEdge(cr, edge, centerY, height)
+		}
 	}
 
-	// --- Draw the commit node ---
-	nodeX := float64(c.Lane)*laneWidth + laneWidth/2.0
-	color := laneColor(c.Lane)
+	// --- Pass 4: Draw incoming cross-lane edges (Bezier curves from children) ---
+	for _, edge := range c.IncomingEdges {
+		drawIncomingEdge(cr, edge, centerY, height)
+	}
 
-	if c.IsMerge {
-		// Merge commits are drawn as diamonds.
-		drawDiamond(cr, nodeX, centerY, nodeRadius+1, color)
+	// --- Pass 5: Draw the commit node on top ---
+	if c.IsMerge && !c.IsHead {
+		drawCross(cr, nodeX, centerY, nodeRadius+2, 2.5, ownColor)
 	} else {
-		// Regular commits are circles.
-		drawCircle(cr, nodeX, centerY, nodeRadius, color)
+		drawCircle(cr, nodeX, centerY, nodeRadius, ownColor)
 	}
 
 	// HEAD commit gets a double-ring.
 	if c.IsHead {
-		cr.SetSourceRGB(color[0], color[1], color[2])
+		cr.SetSourceRGB(ownColor[0], ownColor[1], ownColor[2])
 		cr.SetLineWidth(1.5)
-		cr.Arc(nodeX, centerY, nodeRadius+3, 0, 2*3.14159)
+		cr.Arc(nodeX, centerY, nodeRadius+3, 0, 2*math.Pi)
 		cr.Stroke()
 	}
 }
 
-// drawEdge draws a connection line from this commit to a parent.
-func drawEdge(cr *cairo.Context, edge git.GraphEdge, centerY float64, height int) {
+// drawOutgoingEdge draws a curved connection line from this commit's node
+// (centerY) down to a parent's lane at the bottom of the row.
+func drawOutgoingEdge(cr *cairo.Context, edge git.GraphEdge, centerY float64, height int) {
 	fromX := float64(edge.FromLane)*laneWidth + laneWidth/2.0
 	toX := float64(edge.ToLane)*laneWidth + laneWidth/2.0
+	h := float64(height)
 	color := laneColor(edge.ToLane)
 
 	cr.SetSourceRGB(color[0], color[1], color[2])
@@ -173,40 +184,61 @@ func drawEdge(cr *cairo.Context, edge git.GraphEdge, centerY float64, height int
 
 	cr.SetLineWidth(1.5)
 
-	if edge.FromLane == edge.ToLane {
-		// Straight vertical line — the edge stays in the same lane.
-		cr.MoveTo(fromX, 0)
-		cr.LineTo(fromX, float64(height))
+	// Bezier curve from the node center down to the bottom of the row.
+	cr.MoveTo(fromX, centerY)
+	cp1y := centerY + h/4.0
+	cp2y := h - h/4.0
+	cr.CurveTo(fromX, cp1y, toX, cp2y, toX, h)
+	cr.Stroke()
+}
+
+// drawIncomingEdge draws a curved connection line from a child's lane at
+// the top of the row to this commit's node (centerY). This shows branch
+// divergence: where a child in a different lane connects to this parent.
+func drawIncomingEdge(cr *cairo.Context, edge git.GraphEdge, centerY float64, height int) {
+	fromX := float64(edge.FromLane)*laneWidth + laneWidth/2.0
+	toX := float64(edge.ToLane)*laneWidth + laneWidth/2.0
+	color := laneColor(edge.FromLane)
+
+	cr.SetSourceRGB(color[0], color[1], color[2])
+
+	if edge.Style == git.EdgeDashed {
+		cr.SetDash([]float64{4, 4}, 0)
 	} else {
-		// Curved line — the edge crosses lanes.
-		// Use a bezier curve for smooth visual appearance.
-		cr.MoveTo(fromX, centerY)
-		// Control points create a smooth S-curve.
-		cp1y := centerY + float64(height)/4.0
-		cp2y := float64(height) - float64(height)/4.0
-		cr.CurveTo(fromX, cp1y, toX, cp2y, toX, float64(height))
+		cr.SetDash(nil, 0)
 	}
 
+	cr.SetLineWidth(1.5)
+
+	// Bezier curve from the top of the row to the node center.
+	cp1y := centerY / 4.0
+	cp2y := centerY - centerY/4.0
+	cr.MoveTo(fromX, 0)
+	cr.CurveTo(fromX, cp1y, toX, cp2y, toX, centerY)
 	cr.Stroke()
 }
 
 // drawCircle draws a filled circle at the given position.
 func drawCircle(cr *cairo.Context, x, y, radius float64, color [3]float64) {
 	cr.SetSourceRGB(color[0], color[1], color[2])
-	cr.Arc(x, y, radius, 0, 2*3.14159)
+	cr.Arc(x, y, radius, 0, 2*math.Pi)
 	cr.Fill()
 }
 
-// drawDiamond draws a filled diamond (rotated square) at the given position.
+// drawCross draws a little cross at the given position.
 // Used for merge commits to visually distinguish them from regular commits.
-func drawDiamond(cr *cairo.Context, x, y, size float64, color [3]float64) {
-	cr.SetSourceRGB(color[0], color[1], color[2])
-	cr.MoveTo(x, y-size)
-	cr.LineTo(x+size, y)
-	cr.LineTo(x, y+size)
-	cr.LineTo(x-size, y)
-	cr.ClosePath()
-	cr.Fill()
+func drawCross(cr *cairo.Context, x, y, size float64, lineWidth float64, color [3]float64) {
+  cr.SetSourceRGB(color[0], color[1], color[2])
+  cr.Arc(x, y, size, 0, 2*math.Pi)
+  cr.Fill()
+	cr.SetSourceRGB(0, 0, 0)
+  cr.SetLineWidth(lineWidth)
+  cr.MoveTo(x, y-size+2)
+  cr.LineTo(x, y+size-2)
+  cr.Stroke()
+  cr.MoveTo(x-size+2, y)
+  cr.LineTo(x+size-2, y)
+  cr.Stroke()
 }
 
 // laneColor returns the color for a given lane index, cycling through

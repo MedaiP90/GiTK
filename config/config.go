@@ -64,10 +64,19 @@ type Config struct {
 	// Graph holds settings for the visual graph view.
 	Graph GraphConfig `json:"graph"`
 
+	// MergeTool holds settings for merge conflict resolution.
+	MergeTool MergeToolConfig `json:"merge_tool"`
+
 	// BranchOrder stores custom ordering for local branches in the sidebar.
 	// Branches not listed here appear after the explicitly-ordered ones,
 	// sorted alphabetically.
 	BranchOrder []string `json:"branch_order,omitempty"`
+
+	// WindowWidth is the last saved window width in pixels.
+	WindowWidth int `json:"window_width"`
+
+	// WindowHeight is the last saved window height in pixels.
+	WindowHeight int `json:"window_height"`
 
 	// configPath is the full path to the config file on disk.
 	// This is not serialized — it's set when loading.
@@ -130,6 +139,17 @@ type AIConfig struct {
 	SystemPrompt string `json:"system_prompt,omitempty"`
 }
 
+// MergeToolConfig holds settings for the merge conflict resolution tool.
+type MergeToolConfig struct {
+	// UseExternal, when true, launches an external merge tool instead of
+	// the built-in three-pane editor.
+	UseExternal bool `json:"use_external"`
+
+	// ExternalCommand is the command to run for the external merge tool.
+	// Example: "meld", "kdiff3", "vimdiff".
+	ExternalCommand string `json:"external_command,omitempty"`
+}
+
 // GraphConfig holds settings for the visual graph view.
 type GraphConfig struct {
 	// MaxCommits is the maximum number of commits to load in the graph.
@@ -165,6 +185,8 @@ func Default() *Config {
 			ShowTags:    true,
 			ShowRemotes: true,
 		},
+		WindowWidth:  1200,
+		WindowHeight: 800,
 	}
 }
 
