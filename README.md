@@ -449,7 +449,7 @@ The app ID `io.github.MedaiP90.GiTK` follows the Flathub verification format.
 - [x] Preferences window
 - [x] Flatpak packaging files
 
-### v0.2.0 (In Progress)
+### v0.2.0 (Current)
 - [x] Stash operations (full UI + git CLI backend)
 - [x] Stash count chip in toolbar
 - [x] Submodule management (add, update, remove in sidebar)
