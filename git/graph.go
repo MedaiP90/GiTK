@@ -24,6 +24,7 @@ package git
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"time"
 )
@@ -286,8 +287,8 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 	// A nil/empty string means the lane is free.
 	activeLanes := make([]string, 0)
 
-	// commitLane maps commit hash → lane index (for commits we've already placed).
-	commitLane := make(map[string]int)
+	// List of nodes that have children from other lanes.
+	parentsWaiting := make([]string, 0)
 
 	result := make([]GraphCommit, 0, len(commits))
 
@@ -307,18 +308,28 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 			}
 		}
 
+		// isParent means at least one child commit was waiting for this commit
+		isParent := slices.Contains(parentsWaiting, ci.Hash)
+
+		if isParent {
+		  // Remove this commit from parentsWaiting since we're processing it now.
+			parentsWaiting = slices.DeleteFunc(parentsWaiting, func(p string) bool {
+        return p == ci.Hash
+      })
+		}
+
 		// isLaneTip means no child was waiting for this commit — it's the
 		// topmost commit on its lane (branch tip).
-		isLaneTip := lane == -1
+		isLaneTip := lane == -1 && !isParent
 
 		if lane == -1 {
 			// No lane is waiting for this commit. Find a free lane or create a new one.
 			lane = findFreeLane(activeLanes)
-			if lane == -1 {
-				// All lanes are occupied — add a new one.
-				lane = len(activeLanes)
-				activeLanes = append(activeLanes, "")
-			}
+		}
+		if lane == -1 {
+			// All lanes are occupied — add a new one.
+			lane = len(activeLanes)
+			activeLanes = append(activeLanes, "")
 		}
 
 		// Cap at MaxLanes.
@@ -341,12 +352,14 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 			}
 		}
 
-		commitLane[ci.Hash] = lane
+		// Free converging lanes — after parent allocation is done.
+		for _, cl := range convergingLanes {
+			if cl < len(activeLanes) {
+				activeLanes[cl] = ""
+			}
+		}
 
-		// Compute edges to parents BEFORE freeing converging lanes, so that
-		// findFreeLane won't reuse a converging lane for a new parent. This
-		// prevents the same lane slot from being both an incoming Bezier
-		// source and a new pass-through line in the same row.
+		// Compute edges to parents
 		edges := make([]GraphEdge, 0, len(ci.ParentHashes))
 
 		for parentIdx, parentHash := range ci.ParentHashes {
@@ -368,14 +381,16 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 
 				if parentLane == -1 {
 					// Find a free lane for this parent.
-					freeLane := findFreeLane(activeLanes)
-					if freeLane == -1 {
-						freeLane = len(activeLanes)
-						activeLanes = append(activeLanes, "")
-					}
-					activeLanes[freeLane] = parentHash
-					parentLane = freeLane
+					parentLane = findFreeLane(activeLanes)
 				}
+				if parentLane == -1 {
+				  // All lanes are occupied — add a new one.
+					parentLane = len(activeLanes)
+					activeLanes = append(activeLanes, "")
+				}
+
+				// Require the parent from another lane.
+				parentsWaiting = append(parentsWaiting, parentHash)
 			}
 
 			if parentLane >= MaxLanes {
@@ -392,13 +407,6 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 				ToLane:   parentLane,
 				Style:    style,
 			})
-		}
-
-		// NOW free converging lanes — after parent allocation is done.
-		for _, cl := range convergingLanes {
-			if cl < len(activeLanes) {
-				activeLanes[cl] = ""
-			}
 		}
 
 		// If this commit has no parents (root commit), free its lane.
