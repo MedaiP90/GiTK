@@ -14,7 +14,7 @@
 # Application metadata
 APP_ID    := io.github.MedaiP90.GiTK
 APP_NAME  := gitk
-VERSION   := 0.1.0
+VERSION   := 0.2.0
 
 # Go build settings
 GO        := go
