@@ -152,7 +152,7 @@ func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 
 	// --- Pass 5: Draw the commit node on top ---
 	if c.IsMerge {
-		drawDiamond(cr, nodeX, centerY, nodeRadius+1, ownColor)
+		drawCross(cr, nodeX, centerY, nodeRadius+2, 2.5, ownColor)
 	} else {
 		drawCircle(cr, nodeX, centerY, nodeRadius, ownColor)
 	}
@@ -225,16 +225,20 @@ func drawCircle(cr *cairo.Context, x, y, radius float64, color [3]float64) {
 	cr.Fill()
 }
 
-// drawDiamond draws a filled diamond (rotated square) at the given position.
+// drawCross draws a little cross at the given position.
 // Used for merge commits to visually distinguish them from regular commits.
-func drawDiamond(cr *cairo.Context, x, y, size float64, color [3]float64) {
-	cr.SetSourceRGB(color[0], color[1], color[2])
-	cr.MoveTo(x, y-size)
-	cr.LineTo(x+size, y)
-	cr.LineTo(x, y+size)
-	cr.LineTo(x-size, y)
-	cr.ClosePath()
-	cr.Fill()
+func drawCross(cr *cairo.Context, x, y, size float64, lineWidth float64, color [3]float64) {
+  cr.SetSourceRGB(color[0], color[1], color[2])
+  cr.Arc(x, y, size, 0, 2*math.Pi)
+  cr.Fill()
+	cr.SetSourceRGB(0, 0, 0)
+  cr.SetLineWidth(lineWidth)
+  cr.MoveTo(x, y-size+2)
+  cr.LineTo(x, y+size-2)
+  cr.Stroke()
+  cr.MoveTo(x-size+2, y)
+  cr.LineTo(x+size-2, y)
+  cr.Stroke()
 }
 
 // laneColor returns the color for a given lane index, cycling through
