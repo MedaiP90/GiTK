@@ -326,7 +326,7 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 			lane = MaxLanes - 1
 		}
 
-		// Build incoming edges from converging lanes and free them.
+		// Build incoming edges from converging lanes.
 		var incomingEdges []GraphEdge
 		for _, cl := range convergingLanes {
 			if cl >= MaxLanes {
@@ -339,15 +339,14 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 					Style:    EdgeSolid,
 				})
 			}
-			// Free the converging lane.
-			if cl < len(activeLanes) {
-				activeLanes[cl] = ""
-			}
 		}
 
 		commitLane[ci.Hash] = lane
 
-		// Compute edges to parents.
+		// Compute edges to parents BEFORE freeing converging lanes, so that
+		// findFreeLane won't reuse a converging lane for a new parent. This
+		// prevents the same lane slot from being both an incoming Bezier
+		// source and a new pass-through line in the same row.
 		edges := make([]GraphEdge, 0, len(ci.ParentHashes))
 
 		for parentIdx, parentHash := range ci.ParentHashes {
@@ -393,6 +392,13 @@ func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash st
 				ToLane:   parentLane,
 				Style:    style,
 			})
+		}
+
+		// NOW free converging lanes — after parent allocation is done.
+		for _, cl := range convergingLanes {
+			if cl < len(activeLanes) {
+				activeLanes[cl] = ""
+			}
 		}
 
 		// If this commit has no parents (root commit), free its lane.

@@ -72,23 +72,28 @@ func ClearGraphCommit(da *gtk.DrawingArea) {
 }
 
 // drawGraph renders the lane lines, edges, and commit node for one row.
+//
+// The rendering follows a simple per-commit connection model:
+//   - Same-lane parent/child → vertical line segment
+//   - Cross-lane parent/child → Bezier curve
+//   - Root (no parents) → vertical line top-half only (top → center)
+//   - Tip (no same-lane child) → vertical line bottom-half only (center → bottom)
+//   - Other active lanes → full-height pass-through lines
 func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 	h := float64(height)
 	centerY := h / 2.0
 
-	// Build a set of lanes whose incoming edges are being merged into this
-	// commit's lane via a Bezier curve. These lanes are freed after this row,
-	// so we must NOT draw a straight pass-through line for them.
-	// Outgoing edge targets are NOT skipped: those lanes remain active and
-	// may carry other branches through this row.
+	// Build a set of lanes that are merging INTO this commit via incoming
+	// edges. These lanes are terminated here and handled by Bezier curves,
+	// so they must NOT get a straight pass-through line.
 	incomingLanes := make(map[int]bool, len(c.IncomingEdges))
 	for _, edge := range c.IncomingEdges {
 		incomingLanes[edge.FromLane] = true
 	}
 
 	// --- Pass 1: Draw active lane pass-through lines ---
-	// Skip the commit's own lane (handled in Pass 2) and lanes that
-	// have an incoming edge (handled by a Bezier curve in Pass 4).
+	// These are lanes that flow through this row without interacting with
+	// this commit. Skip the commit's own lane and incoming converging lanes.
 	for _, lane := range c.ActiveLanes {
 		if lane == c.Lane || incomingLanes[lane] {
 			continue
@@ -104,7 +109,13 @@ func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 	}
 
 	// --- Pass 2: Draw the commit's own lane vertical line ---
+	// Determine which halves to draw based on connectivity:
+	//   - drawTop: true if this commit has a same-lane child above (not a tip)
+	//   - drawBottom: true if this commit has a same-lane parent below (not root)
 	hasParents := len(c.Edges) > 0
+	drawTop := !c.IsLaneTip
+	drawBottom := hasParents // first parent is always same-lane
+
 	nodeX := float64(c.Lane)*laneWidth + laneWidth/2.0
 	ownColor := laneColor(c.Lane)
 
@@ -112,33 +123,29 @@ func drawGraph(cr *cairo.Context, c git.GraphCommit, width, height int) {
 	cr.SetLineWidth(1.5)
 	cr.SetDash(nil, 0)
 
-	if !hasParents {
-		// Root commit: line from the node to the top of the row.
-		cr.MoveTo(nodeX, centerY)
-		cr.LineTo(nodeX, 0)
-		cr.Stroke()
-	} else if c.IsLaneTip {
-		// Tip of a branch: line from center down to bottom only.
-		cr.MoveTo(nodeX, centerY)
-		cr.LineTo(nodeX, h)
-		cr.Stroke()
-	} else {
-		// Normal commit: full-height line connects to rows above and below.
+	if drawTop && drawBottom {
 		cr.MoveTo(nodeX, 0)
 		cr.LineTo(nodeX, h)
 		cr.Stroke()
+	} else if drawTop {
+		cr.MoveTo(nodeX, 0)
+		cr.LineTo(nodeX, centerY)
+		cr.Stroke()
+	} else if drawBottom {
+		cr.MoveTo(nodeX, centerY)
+		cr.LineTo(nodeX, h)
+		cr.Stroke()
 	}
+	// If neither drawTop nor drawBottom, the commit is an isolated node.
 
-	// --- Pass 3: Draw outgoing cross-lane edges (curves to parent lanes) ---
+	// --- Pass 3: Draw outgoing cross-lane edges (Bezier curves to parents) ---
 	for _, edge := range c.Edges {
 		if edge.FromLane != edge.ToLane {
 			drawOutgoingEdge(cr, edge, centerY, height)
 		}
 	}
 
-	// --- Pass 4: Draw incoming edges from converging children ---
-	// These are branches that diverge upward: curves from the child's lane
-	// at the top of the row to the commit's node center.
+	// --- Pass 4: Draw incoming cross-lane edges (Bezier curves from children) ---
 	for _, edge := range c.IncomingEdges {
 		drawIncomingEdge(cr, edge, centerY, height)
 	}

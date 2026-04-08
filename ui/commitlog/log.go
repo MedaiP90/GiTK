@@ -195,9 +195,16 @@ func (cl *CommitLog) SetRepository(repo *git.Repository) {
 }
 
 // Refresh reloads commits from the current repository.
+// It preserves the currently selected commit across the reload.
 func (cl *CommitLog) Refresh() {
 	if cl.repo == nil {
 		return
+	}
+
+	// Remember which commit was selected so we can restore it.
+	var selectedHash string
+	if pos := cl.selection.Selected(); int(pos) < len(cl.commits) {
+		selectedHash = cl.commits[pos].Hash
 	}
 
 	// Load all commits (all branches) so the list matches the graph data.
@@ -224,11 +231,13 @@ func (cl *CommitLog) Refresh() {
 	cl.currentBranch = cl.repo.CurrentBranch()
 
 	cl.allCommits = commits
-	cl.setCommits(commits)
+	cl.setCommits(commits, selectedHash)
 }
 
-// setCommits replaces the displayed commits.
-func (cl *CommitLog) setCommits(commits []git.CommitInfo) {
+// setCommits replaces the displayed commits. If preferHash is non-empty,
+// the row matching that hash is selected; otherwise the first row is selected.
+// This prevents the table from jumping to row 0 on every refresh.
+func (cl *CommitLog) setCommits(commits []git.CommitInfo, preferHash string) {
 	cl.commits = commits
 
 	// Rebuild the commit map.
@@ -248,14 +257,24 @@ func (cl *CommitLog) setCommits(commits []git.CommitInfo) {
 	}
 	cl.model.Splice(0, 0, hashes)
 
-	// Pre-select the first commit and notify the detail panel.
-	// SetSelected(0) alone may not fire ConnectSelectionChanged if the
-	// selection was already at position 0 (e.g., after a refresh).
-	if len(commits) > 0 {
-		cl.selection.SetSelected(0)
-		if cl.onCommitSelected != nil {
-			cl.onCommitSelected(commits[0])
+	if len(commits) == 0 {
+		return
+	}
+
+	// Try to restore the previously selected commit, or fall back to row 0.
+	selectPos := uint(0)
+	if preferHash != "" {
+		for i, c := range commits {
+			if c.Hash == preferHash {
+				selectPos = uint(i)
+				break
+			}
 		}
+	}
+
+	cl.selection.SetSelected(selectPos)
+	if cl.onCommitSelected != nil {
+		cl.onCommitSelected(commits[selectPos])
 	}
 
 	slog.Debug("commit log updated", "count", len(commits))
@@ -271,7 +290,7 @@ func (cl *CommitLog) applyFilter(query string) {
 
 	if query == "" {
 		// No filter — show all commits.
-		cl.setCommits(cl.allCommits)
+		cl.setCommits(cl.allCommits, "")
 		return
 	}
 
@@ -285,7 +304,7 @@ func (cl *CommitLog) applyFilter(query string) {
 		}
 	}
 
-	cl.setCommits(filtered)
+	cl.setCommits(filtered, "")
 }
 
 // RefsForCommit returns the graph refs (branches/tags) for a given commit hash.
