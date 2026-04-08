@@ -283,6 +283,8 @@ func buildRefMap(repo *Repository, opts GraphOptions) (map[string][]GraphRef, er
 // This is a standard git graph layout algorithm similar to what `git log
 // --graph` uses internally.
 func assignLanes(commits []CommitInfo, refMap map[string][]GraphRef, headHash string) []GraphCommit {
+  SortCommitsByTimestamp(commits)
+
 	// activeLanes tracks which commit hash each lane is waiting for.
 	// A nil/empty string means the lane is free.
 	activeLanes := make([]string, 0)

@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -462,6 +463,13 @@ func (r *Repository) LogAll(maxCount int) ([]CommitInfo, error) {
 	}
 
 	return commits, nil
+}
+
+// SortCommitsByTimestamp sorts commits by timestamp (newest first).
+func SortCommitsByTimestamp(commits []CommitInfo) {
+	sort.Slice(commits, func(i, j int) bool {
+		return commits[i].CommitTime.After(commits[j].CommitTime)
+	})
 }
 
 // GoGitRepo returns the underlying go-git repository for operations
